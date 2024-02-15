@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package testapi.v1;
+
+service TestService {
+  // UnaryEcho is a single-request single-response handler.
+  // The message specified in the request is returned in the response.
+  rpc UnaryEcho(UnaryEchoRequest) returns (UnaryEchoResponse);
+
+  // ClientStreamEcho takes in a stream of client requests containing lists of messages,
+  // and then returns a single response containing an accumulated list of all the messages.
+  rpc ClientStreamEcho(stream ClientStreamEchoRequest) returns (ClientStreamEchoResponse);
+
+  // ServerStreamEcho returns one or more responses for the client request,
+  // each response containing the message from the request, and the 0-based
+  // index specifying how many times this message has been already repeated.
+  rpc ServerStreamEcho(ServerStreamEchoRequest) returns (stream ServerStreamEchoResponse);
+
+  // BiDiStreamEcho returns a single response for each client request,
+  // containing the exact field and content that was sent by the client.
+  rpc BiDiStreamEcho(stream BiDiStreamEchoRequest) returns (stream BiDiStreamEchoResponse);
+}
+
+message UnaryEchoRequest {
+  string message = 1;
+}
+
+message UnaryEchoResponse {
+  string message = 1;
+}
+
+message ClientStreamEchoRequest {
+  repeated string messages = 1;
+}
+
+message ClientStreamEchoResponse {
+  repeated string accumulated = 1;
+}
+
+message ServerStreamEchoRequest {
+  string message = 1;
+  int32 repeat = 2;
+}
+
+message ServerStreamEchoResponse {
+  string message = 1;
+  int32 index = 2;
+}
+
+message BiDiStreamEchoRequest {
+  oneof message {
+    string text = 1;
+    bytes data = 2;
+  }
+}
+
+message BiDiStreamEchoResponse {
+  oneof message {
+    string text = 1;
+    bytes data = 2;
+  }
+}
