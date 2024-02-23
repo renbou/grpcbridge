@@ -1,0 +1,10 @@
+{
+  "service": {
+    "testsvc": {
+      "target": "localhost:50051"
+    },
+    "anothersvc": {
+      "target": "localhost:50052"
+    }
+  }
+}
