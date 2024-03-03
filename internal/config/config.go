@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -55,8 +54,10 @@ func LogLevel() slog.Level {
 	return slog.LevelInfo
 }
 
-func Load(ctx context.Context, logger grpcbridge.Logger, args []string) (*grpcbridge.Config, error) {
+func Load(logger grpcbridge.Logger, args []string) (*grpcbridge.Config, error) {
 	var configPath string
+
+	logger = logger.WithComponent("grpcbridge.config")
 
 	// Try to get config path from the command line for easy route.
 	fs := flag.NewFlagSet("grpcbridge", flag.ContinueOnError)
@@ -78,10 +79,10 @@ func Load(ctx context.Context, logger grpcbridge.Logger, args []string) (*grpcbr
 	if configPath == "" {
 		discovered, origin, ok := discoverPath()
 		if !ok {
-			logger.WarnContext(ctx, "No config file found, and no --config flag was provided. Will use default configuration.")
+			logger.Warn("No config file found, and no --config flag was provided. Will use default configuration.")
 		} else {
 			configPath = discovered
-			logger.InfoContext(ctx, fmt.Sprintf("Using discovered config file %q", configPath), "discovery_origin", origin)
+			logger.Info(fmt.Sprintf("Using discovered config file %q", configPath), "discovery_origin", origin.String())
 		}
 	}
 

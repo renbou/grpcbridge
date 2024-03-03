@@ -24,6 +24,7 @@ func Test_ReadHCL(t *testing.T) {
 			wantConfig: &grpcbridge.Config{
 				Services: map[string]grpcbridge.ServiceConfig{
 					"test": {
+						Name:   "test",
 						Target: "127.0.0.1:50051",
 					},
 				},
@@ -34,12 +35,15 @@ func Test_ReadHCL(t *testing.T) {
 			wantConfig: &grpcbridge.Config{
 				Services: map[string]grpcbridge.ServiceConfig{
 					"testsvc1": {
+						Name:   "testsvc1",
 						Target: "127.0.0.1:50052",
 					},
 					"testsvc2": {
+						Name:   "testsvc2",
 						Target: "scheme://testsvc2:grpc",
 					},
 					"testsvc3": {
+						Name:   "testsvc3",
 						Target: "https://127.0.0.1:50054",
 					},
 				},
@@ -50,9 +54,11 @@ func Test_ReadHCL(t *testing.T) {
 			wantConfig: &grpcbridge.Config{
 				Services: map[string]grpcbridge.ServiceConfig{
 					"testsvc": {
+						Name:   "testsvc",
 						Target: "localhost:50051",
 					},
 					"anothersvc": {
+						Name:   "anothersvc",
 						Target: "localhost:50052",
 					},
 				},

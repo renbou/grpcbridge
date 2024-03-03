@@ -30,6 +30,7 @@ func ReadHCL(filename string) (*grpcbridge.Config, error) {
 	for i := range rawCfg.Services {
 		svcCfg := &rawCfg.Services[i]
 		cfg.Services[svcCfg.Name] = grpcbridge.ServiceConfig{
+			Name:   svcCfg.Name,
 			Target: svcCfg.Target,
 		}
 	}
