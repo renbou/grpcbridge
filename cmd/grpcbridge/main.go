@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -9,10 +10,11 @@ import (
 	"time"
 
 	"github.com/renbou/grpcbridge"
-	"github.com/renbou/grpcbridge/discovery"
-	"github.com/renbou/grpcbridge/discovery/reflection"
+	"github.com/renbou/grpcbridge/grpcadapter"
 	"github.com/renbou/grpcbridge/internal/config"
+	"github.com/renbou/grpcbridge/reflection"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
@@ -25,7 +27,7 @@ type loggingWatcher struct {
 	logger grpcbridge.Logger
 }
 
-func (lw *loggingWatcher) UpdateState(state *discovery.State) {
+func (lw *loggingWatcher) UpdateState(state *reflection.DiscoveryState) {
 	lw.logger.Info("State updated", "state", state)
 }
 
@@ -47,18 +49,18 @@ func mainImpl() error {
 		return err
 	}
 
-	resolverBuilder := reflection.NewResolverBuilder(logger, &reflection.ResolverOpts{
+	connPool := grpcadapter.NewClientConnPool(func(ctx context.Context, s string) (*grpc.ClientConn, error) {
+		return grpc.DialContext(ctx, s, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	})
+
+	resolverBuilder := reflection.NewResolverBuilder(logger, connPool, &reflection.ResolverOpts{
 		PollInterval: time.Second * 5,
 	})
 
 	for _, cfg := range cfg.Services {
-		cc, err := grpc.Dial(cfg.Target, grpc.WithInsecure())
-		if err != nil {
-			logger.Error("Failed to dial target", "target", cfg.Target, "error", err)
-			return err
-		}
+		_ = connPool.Build(context.Background(), cfg.Name, cfg.Target)
 
-		_, err = resolverBuilder.Build(&cfg, cc, &loggingWatcher{logger: logger})
+		_, err = resolverBuilder.Build(cfg.Name, &loggingWatcher{logger: logger})
 		if err != nil {
 			logger.Error("Failed to build resolver", "error", err)
 			return err

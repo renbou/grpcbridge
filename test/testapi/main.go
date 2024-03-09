@@ -9,8 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	testapiv1 "testapi/gen/go/proto/testapi/v1"
 	"time"
+
+	testapiv1 "testapi/gen/go/proto/testapi/v1"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"google.golang.org/grpc"

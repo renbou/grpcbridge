@@ -1,10 +1,5 @@
 package grpcbridge
 
-import (
-	"github.com/renbou/grpcbridge/discovery"
-	"google.golang.org/grpc"
-)
-
 type PlainLogger interface {
 	Debug(string, ...any)
 	Info(string, ...any)
@@ -40,10 +35,6 @@ type Config struct {
 type ServiceConfig struct {
 	Name   string
 	Target string
-}
-
-type ResolverBuilder interface {
-	Build(*ServiceConfig, *grpc.ClientConn, discovery.Watcher) (discovery.Resolver, error)
 }
 
 type wrappedLogger[T PlainLogger] struct {
