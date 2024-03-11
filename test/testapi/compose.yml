@@ -1,12 +1,8 @@
 services:
   testapi:
-    image: testapi:latest
     build: .
+    environment:
+      LISTEN_ADDR: ":50051"
     ports:
       - "50051:50051"
-    restart: unless-stopped
-  testapi2:
-    image: testapi:latest
-    ports:
-      - "50052:50051"
     restart: unless-stopped

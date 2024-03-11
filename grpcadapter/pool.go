@@ -50,7 +50,12 @@ func (p *ClientConnPool) Get(name string) *ClientConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.conns[name].cc
+	controller, ok := p.conns[name]
+	if !ok {
+		return nil
+	}
+
+	return controller.cc
 }
 
 func (p *ClientConnPool) remove(name string) {

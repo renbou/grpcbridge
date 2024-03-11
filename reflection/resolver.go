@@ -53,7 +53,7 @@ func (opts *ResolverOpts) WithDefaults() ResolverOpts {
 var DefaultResolverOpts = ResolverOpts{
 	PollInterval:   5 * time.Minute,
 	ReqTimeout:     10 * time.Second,
-	IgnorePrefixes: []string{},
+	IgnorePrefixes: nil,
 }
 
 type ResolverBuilder struct {

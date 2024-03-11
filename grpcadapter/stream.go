@@ -33,6 +33,11 @@ func (s *BiDiStream) Recv(ctx context.Context, msg proto.Message) error {
 	return s.withCtx(ctx, func() error { return s.stream.RecvMsg(msg) })
 }
 
+func (s *BiDiStream) CloseSend() {
+	// never returns an error, and we don't care about it anyway, just like with Close()
+	_ = s.stream.CloseSend()
+}
+
 func (s *BiDiStream) Close() {
 	s.closeFunc()
 }
