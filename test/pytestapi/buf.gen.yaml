@@ -1,0 +1,8 @@
+version: v1
+managed:
+  enabled: true
+plugins:
+  - plugin: python
+    out: pytestapi/gen
+  - plugin: grpclib_python
+    out: pytestapi/gen

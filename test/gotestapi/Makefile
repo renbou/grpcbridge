@@ -11,7 +11,3 @@ BIN_DIR ?= $(ROOT_DIR)/bin
 gen: export PATH := $(BIN_DIR):$(PATH)
 gen: .gen-deps
 	buf generate
-
-.PHONY: run
-run:
-	docker compose up --build

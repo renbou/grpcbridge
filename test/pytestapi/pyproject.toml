@@ -1,0 +1,17 @@
+[tool.poetry]
+authors = ["renbou"]
+description = "Python gRPC API for testing grpcbridge."
+name = "pytestapi"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+grpclib = { extras = ["protobuf"], version = "^0.4.7" }
+python = "^3.12"
+structlog = "^24.1.0"
+
+[build-system]
+build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core"]
+
+[tool.poetry.scripts]
+pytestapi-server = "scripts.server:main"

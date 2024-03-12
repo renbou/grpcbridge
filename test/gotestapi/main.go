@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	testapiv1 "testapi/gen/go/proto/testapi/v1"
+	gotestapiv1 "gotestapi/gen/proto/gotestapi/v1"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"google.golang.org/grpc"
@@ -21,22 +21,22 @@ import (
 )
 
 type TestService struct {
-	testapiv1.UnimplementedTestServiceServer
+	gotestapiv1.UnimplementedEchoServiceServer
 }
 
-func (s *TestService) UnaryEcho(ctx context.Context, req *testapiv1.UnaryEchoRequest) (*testapiv1.UnaryEchoResponse, error) {
-	return &testapiv1.UnaryEchoResponse{
+func (s *TestService) UnaryEcho(ctx context.Context, req *gotestapiv1.UnaryEchoRequest) (*gotestapiv1.UnaryEchoResponse, error) {
+	return &gotestapiv1.UnaryEchoResponse{
 		Message: req.Message,
 	}, nil
 }
 
-func (s *TestService) ClientStreamEcho(stream testapiv1.TestService_ClientStreamEchoServer) error {
+func (s *TestService) ClientStreamEcho(stream gotestapiv1.EchoService_ClientStreamEchoServer) error {
 	var messages []string
 
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
-			return stream.SendAndClose(&testapiv1.ClientStreamEchoResponse{
+			return stream.SendAndClose(&gotestapiv1.ClientStreamEchoResponse{
 				Accumulated: messages,
 			})
 		} else if err != nil {
@@ -47,9 +47,9 @@ func (s *TestService) ClientStreamEcho(stream testapiv1.TestService_ClientStream
 	}
 }
 
-func (s *TestService) ServerStreamEcho(req *testapiv1.ServerStreamEchoRequest, stream testapiv1.TestService_ServerStreamEchoServer) error {
+func (s *TestService) ServerStreamEcho(req *gotestapiv1.ServerStreamEchoRequest, stream gotestapiv1.EchoService_ServerStreamEchoServer) error {
 	for i := range req.Repeat {
-		if err := stream.Send(&testapiv1.ServerStreamEchoResponse{
+		if err := stream.Send(&gotestapiv1.ServerStreamEchoResponse{
 			Message: req.Message,
 			Index:   int32(i),
 		}); err != nil {
@@ -60,7 +60,7 @@ func (s *TestService) ServerStreamEcho(req *testapiv1.ServerStreamEchoRequest, s
 	return nil
 }
 
-func (s *TestService) BiDiStreamEcho(stream testapiv1.TestService_BiDiStreamEchoServer) error {
+func (s *TestService) BiDiStreamEcho(stream gotestapiv1.EchoService_BiDiStreamEchoServer) error {
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -69,13 +69,13 @@ func (s *TestService) BiDiStreamEcho(stream testapiv1.TestService_BiDiStreamEcho
 			return status.Errorf(codes.Internal, "receiving client message: %s", err)
 		}
 
-		response := &testapiv1.BiDiStreamEchoResponse{}
+		response := &gotestapiv1.BiDiStreamEchoResponse{}
 
 		switch x := req.Message.(type) {
-		case *testapiv1.BiDiStreamEchoRequest_Text:
-			response.Message = &testapiv1.BiDiStreamEchoResponse_Text{Text: x.Text}
-		case *testapiv1.BiDiStreamEchoRequest_Data:
-			response.Message = &testapiv1.BiDiStreamEchoResponse_Data{Data: x.Data}
+		case *gotestapiv1.BiDiStreamEchoRequest_Text:
+			response.Message = &gotestapiv1.BiDiStreamEchoResponse_Text{Text: x.Text}
+		case *gotestapiv1.BiDiStreamEchoRequest_Data:
+			response.Message = &gotestapiv1.BiDiStreamEchoResponse_Data{Data: x.Data}
 		default:
 			return status.Errorf(codes.InvalidArgument, "unknown message type %T", x)
 		}
@@ -87,7 +87,7 @@ func (s *TestService) BiDiStreamEcho(stream testapiv1.TestService_BiDiStreamEcho
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("app", "gotestapi"))
 
 	listenAddr := ":50051"
 	if value, ok := os.LookupEnv("LISTEN_ADDR"); ok {
@@ -110,7 +110,7 @@ func main() {
 	)
 
 	// Register only v1 gRPC reflection. grpcbridge should properly handle such cases.
-	testapiv1.RegisterTestServiceServer(server, &TestService{})
+	gotestapiv1.RegisterEchoServiceServer(server, &TestService{})
 	reflection.RegisterV1(server)
 
 	go func() {

@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package testapi.v1;
+package gotestapi.v1;
 
-service TestService {
+service EchoService {
   // UnaryEcho is a single-request single-response handler.
   // The message specified in the request is returned in the response.
   rpc UnaryEcho(UnaryEchoRequest) returns (UnaryEchoResponse);

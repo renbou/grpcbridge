@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package pytestapi.v1;
+
+import "google/protobuf/wrappers.proto";
+
+service WrapperService {
+  // UnaryWrap is a single-request single-response handler.
+  // The values specified in the request are returned in their wrapped form in the response.
+  rpc UnaryWrap(UnaryWrapRequest) returns (UnaryWrapResponse);
+}
+
+message UnaryWrapRequest {
+  string string_value = 1;
+  int32 int32_value = 2;
+  float float_value = 3;
+  bool bool_value = 4;
+}
+
+message UnaryWrapResponse {
+  google.protobuf.StringValue string_value = 1;
+  google.protobuf.Int32Value int32_value = 2;
+  google.protobuf.FloatValue float_value = 3;
+  google.protobuf.BoolValue bool_value = 4;
+}

@@ -1,0 +1,15 @@
+services:
+  gotestapi:
+    build: ./gotestapi
+    environment:
+      LISTEN_ADDR: ":50051"
+    ports:
+      - "127.0.0.1:50051:50051"
+    restart: unless-stopped
+  pytestapi:
+    build: ./pytestapi
+    environment:
+      LISTEN_ADDR: ":50052"
+    ports:
+      - "127.0.0.1:50052:50052"
+    restart: unless-stopped

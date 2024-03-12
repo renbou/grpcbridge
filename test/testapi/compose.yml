@@ -1,8 +1,0 @@
-services:
-  testapi:
-    build: .
-    environment:
-      LISTEN_ADDR: ":50051"
-    ports:
-      - "50051:50051"
-    restart: unless-stopped

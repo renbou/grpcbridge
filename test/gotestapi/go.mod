@@ -1,4 +1,4 @@
-module testapi
+module gotestapi
 
 go 1.22
 
