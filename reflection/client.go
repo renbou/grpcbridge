@@ -29,6 +29,14 @@ func connectClient(timeout time.Duration, conn *grpcadapter.ClientConn, method s
 }
 
 func (c *client) close() {
+	c.stream.CloseSend()
+
+	// Close the reflection stream gracefully when possible, to avoid spurious errors on target servers.
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	_ = c.stream.Recv(ctx, new(reflectionpb.ServerReflectionResponse))
+
 	c.stream.Close()
 }
 
