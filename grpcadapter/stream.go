@@ -8,14 +8,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type BiDiStream struct {
+type AdaptedBiDiStream struct {
 	closeFunc func() // cancelFunc from context used to initialize stream, wrapped with sync.Once
 	stream    grpc.ClientStream
 	recvOps   atomic.Int32
 	sendOps   atomic.Int32
 }
 
-func (s *BiDiStream) Send(ctx context.Context, msg proto.Message) error {
+func (s *AdaptedBiDiStream) Send(ctx context.Context, msg proto.Message) error {
 	if s.sendOps.Add(1) > 1 {
 		panic("grpcbridge: Send() called concurrently on gRPC client stream")
 	}
@@ -24,7 +24,7 @@ func (s *BiDiStream) Send(ctx context.Context, msg proto.Message) error {
 	return s.withCtx(ctx, func() error { return s.stream.SendMsg(msg) })
 }
 
-func (s *BiDiStream) Recv(ctx context.Context, msg proto.Message) error {
+func (s *AdaptedBiDiStream) Recv(ctx context.Context, msg proto.Message) error {
 	if s.recvOps.Add(1) > 1 {
 		panic("grpcbridge: Recv() called concurrently on gRPC client stream")
 	}
@@ -33,16 +33,16 @@ func (s *BiDiStream) Recv(ctx context.Context, msg proto.Message) error {
 	return s.withCtx(ctx, func() error { return s.stream.RecvMsg(msg) })
 }
 
-func (s *BiDiStream) CloseSend() {
+func (s *AdaptedBiDiStream) CloseSend() {
 	// never returns an error, and we don't care about it anyway, just like with Close()
 	_ = s.stream.CloseSend()
 }
 
-func (s *BiDiStream) Close() {
+func (s *AdaptedBiDiStream) Close() {
 	s.closeFunc()
 }
 
-func (s *BiDiStream) withCtx(ctx context.Context, f func() error) error {
+func (s *AdaptedBiDiStream) withCtx(ctx context.Context, f func() error) error {
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- f()

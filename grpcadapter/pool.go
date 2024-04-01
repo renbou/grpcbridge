@@ -8,80 +8,80 @@ import (
 	"google.golang.org/grpc"
 )
 
-type ClientConnPool struct {
+type DialedPool struct {
 	mu     sync.Mutex
 	dialer func(context.Context, string) (*grpc.ClientConn, error)
-	conns  map[string]*ClientConnPoolController
+	conns  map[string]*DialedPoolController
 }
 
-func NewClientConnPool(dialer func(context.Context, string) (*grpc.ClientConn, error)) *ClientConnPool {
-	return &ClientConnPool{
+func NewDialedPool(dialer func(context.Context, string) (*grpc.ClientConn, error)) *DialedPool {
+	return &DialedPool{
 		dialer: dialer,
-		conns:  make(map[string]*ClientConnPoolController),
+		conns:  make(map[string]*DialedPoolController),
 	}
 }
 
-// Build creates a new ClientConn and adds it to the pool without waiting for its dial to go through.
-// Calling build using the same name without closing the previous connection will return the existing connection.
-func (p *ClientConnPool) Build(ctx context.Context, name, target string) *ClientConnPoolController {
+// Build creates a new AdaptedClientConn and adds it to the pool without waiting for its dial to go through.
+// Calling build using the same target name without closing the previous connection will return the existing connection.
+func (p *DialedPool) Build(ctx context.Context, targetName, dialTarget string) *DialedPoolController {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	conn, ok := p.conns[name]
+	conn, ok := p.conns[targetName]
 	if ok {
 		return conn
 	}
 
-	unwrapped := NewClientConn(func() (*grpc.ClientConn, error) {
-		return p.dialer(ctx, target)
+	unwrapped := AdaptedDial(func() (*grpc.ClientConn, error) {
+		return p.dialer(ctx, dialTarget)
 	})
 
-	conn = &ClientConnPoolController{
+	conn = &DialedPoolController{
 		pool: p,
-		name: name,
-		cc:   unwrapped,
+		name: targetName,
+		conn: WrapConnection(unwrapped),
 	}
-	p.conns[name] = conn
+	p.conns[targetName] = conn
 
 	return conn
 }
 
-func (p *ClientConnPool) Get(name string) *ClientConn {
+func (p *DialedPool) Get(target string) Connection {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	controller, ok := p.conns[name]
+	controller, ok := p.conns[target]
 	if !ok {
 		return nil
 	}
 
-	return controller.cc
+	return controller.conn
 }
 
-func (p *ClientConnPool) remove(name string) {
+func (p *DialedPool) remove(name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	delete(p.conns, name)
 }
 
-// ClientConnPoolController wraps a ClientConn created using a ClientConnPool,
-// providing methods to control the ClientConn's own and pool lifecycle.
-type ClientConnPoolController struct {
-	pool *ClientConnPool
+// DialedPoolController wraps an AdaptedClientConn created using a DialedPool,
+// providing methods to control the AdaptedClientConn's own and pool lifecycle.
+type DialedPoolController struct {
+	pool *DialedPool
 
 	name   string
-	cc     *ClientConn
+	conn   Connection
 	closed atomic.Bool
 }
 
 // Close removes this connection from the pool and closes it.
 // Calling close multiple times or concurrently will intentionally result in a panic to avoid bugs.
-func (pw *ClientConnPoolController) Close() {
+func (pw *DialedPoolController) Close() {
 	if pw.closed.Swap(true) {
 		panic("grpcbridge: pooled client conn closed multiple times")
 	}
 
 	pw.pool.remove(pw.name)
-	pw.cc.Close()
+	pw.conn.Close()
 }

@@ -9,7 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type ClientConn struct {
+type AdaptedClientConn struct {
 	mu sync.Mutex
 
 	// dialed & closed synchronize the dialing/closing procedures which happen in different goroutines.
@@ -24,11 +24,11 @@ type ClientConn struct {
 	err  error
 }
 
-// NewClientConn calls dial in a separate goroutine,
-// and returns a ClientConn that will be ready when the dial completes.
-// Using the ClientConn prior to the dial completing is valid, but any calls will return an Unavailable status error.
-func NewClientConn(dial func() (*grpc.ClientConn, error)) *ClientConn {
-	cc := &ClientConn{
+// AdaptedDial calls dial in a separate goroutine,
+// and returns an AdaptedClientConn that will be ready when the dial completes.
+// Using the AdaptedClientConn prior to the dial completing is valid, but any calls will return an Unavailable status error.
+func AdaptedDial(dial func() (*grpc.ClientConn, error)) *AdaptedClientConn {
+	cc := &AdaptedClientConn{
 		err:      status.Error(codes.Unavailable, "grpcbridge: connection not yet dialed"),
 		dialedCh: make(chan struct{}),
 	}
@@ -57,7 +57,7 @@ func NewClientConn(dial func() (*grpc.ClientConn, error)) *ClientConn {
 
 // Close requests a close of this connection.
 // If the connection has not yet been dialed, it will be closed when the dial completes.
-func (cc *ClientConn) Close() {
+func (cc *AdaptedClientConn) Close() {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 
@@ -75,7 +75,7 @@ func (cc *ClientConn) Close() {
 	}
 }
 
-func (cc *ClientConn) BiDiStream(ctx context.Context, method string) (*BiDiStream, error) {
+func (cc *AdaptedClientConn) BiDiStream(ctx context.Context, method string) (*AdaptedBiDiStream, error) {
 	conn, err := cc.getConn(ctx)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func (cc *ClientConn) BiDiStream(ctx context.Context, method string) (*BiDiStrea
 
 	// Create new context for the whole stream operation, and use the passed context only for the actual initialization.
 	streamCtx, cancel := context.WithCancel(context.Background())
-	wrapped := &BiDiStream{
+	wrapped := &AdaptedBiDiStream{
 		closeFunc: sync.OnceFunc(cancel), // guaranteed to be called by Recv/Send on failure, otherwise needs to be called by caller
 	}
 
@@ -99,7 +99,7 @@ func (cc *ClientConn) BiDiStream(ctx context.Context, method string) (*BiDiStrea
 	return wrapped, nil
 }
 
-func (cc *ClientConn) getConn(ctx context.Context) (*grpc.ClientConn, error) {
+func (cc *AdaptedClientConn) getConn(ctx context.Context) (*grpc.ClientConn, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctxRPCErr(ctx.Err())
@@ -110,7 +110,7 @@ func (cc *ClientConn) getConn(ctx context.Context) (*grpc.ClientConn, error) {
 }
 
 // close needs to be called while cc.mu is held.
-func (cc *ClientConn) applyClose() {
+func (cc *AdaptedClientConn) applyClose() {
 	// TODO: does this need logging? it only returns an error if called twice...
 	_ = cc.conn.Close()
 

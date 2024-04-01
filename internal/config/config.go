@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/renbou/grpcbridge"
+	"github.com/renbou/grpcbridge/bridgelog"
 )
 
 // FlagError is a special type marking that the error is a result of a flag parsing error.
@@ -54,7 +54,7 @@ func LogLevel() slog.Level {
 	return slog.LevelInfo
 }
 
-func Load(logger grpcbridge.Logger, args []string) (*grpcbridge.Config, error) {
+func Load(logger bridgelog.Logger, args []string) (*Bridge, error) {
 	var configPath string
 
 	logger = logger.WithComponent("grpcbridge.config")
@@ -88,7 +88,7 @@ func Load(logger grpcbridge.Logger, args []string) (*grpcbridge.Config, error) {
 
 	// Finally, return the default config, or read the config from the file.
 	if configPath == "" {
-		return new(grpcbridge.Config), nil
+		return new(Bridge), nil
 	}
 
 	return ReadHCL(configPath)

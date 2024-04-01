@@ -12,11 +12,11 @@ import (
 type client struct {
 	// Untyped stream instead of the ServerReflection_ServerReflectionInfoClient
 	// because both v1 and v1alpha are exactly the same, so messages for them can be interchanged.
-	stream  *grpcadapter.BiDiStream
+	stream  grpcadapter.BiDiStream
 	timeout time.Duration
 }
 
-func connectClient(timeout time.Duration, conn *grpcadapter.ClientConn, method string) (*client, error) {
+func connectClient(timeout time.Duration, conn grpcadapter.Connection, method string) (*client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 

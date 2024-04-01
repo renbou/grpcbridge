@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"github.com/renbou/grpcbridge"
+	"github.com/renbou/grpcbridge/bridgedesc"
+	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
-	"github.com/renbou/grpcbridge/grpcproxy"
 	"github.com/renbou/grpcbridge/internal/config"
 	"github.com/renbou/grpcbridge/reflection"
-	"github.com/renbou/grpcbridge/route"
+	"github.com/renbou/grpcbridge/routing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -27,12 +28,12 @@ func main() {
 }
 
 type aggregateWatcher struct {
-	watchers []reflection.DiscoveryWatcher
+	watchers []reflection.Watcher
 }
 
-func (aw *aggregateWatcher) UpdateState(state *reflection.DiscoveryState) {
+func (aw *aggregateWatcher) UpdateDesc(state *bridgedesc.Target) {
 	for _, w := range aw.watchers {
-		w.UpdateState(state)
+		w.UpdateDesc(state)
 	}
 }
 
@@ -43,17 +44,17 @@ func (aw *aggregateWatcher) ReportError(err error) {
 }
 
 type loggingWatcher struct {
-	logger grpcbridge.Logger
+	logger bridgelog.Logger
 }
 
-func (lw *loggingWatcher) UpdateState(state *reflection.DiscoveryState) {
-	lw.logger.Info("State updated", "state", state)
+func (lw *loggingWatcher) UpdateDesc(desc *bridgedesc.Target) {
+	lw.logger.Info("Target description updated", "state", desc)
 }
 
 func (lw *loggingWatcher) ReportError(err error) {}
 
 func mainImpl() error {
-	logger := grpcbridge.WrapPlainLogger(slog.New(slog.NewJSONHandler(
+	logger := bridgelog.WrapPlainLogger(slog.New(slog.NewJSONHandler(
 		os.Stdout,
 		&slog.HandlerOptions{Level: config.LogLevel()},
 	)))
@@ -66,17 +67,18 @@ func mainImpl() error {
 		return err
 	}
 
-	connPool := grpcadapter.NewClientConnPool(func(ctx context.Context, s string) (*grpc.ClientConn, error) {
+	connPool := grpcadapter.NewDialedPool(func(ctx context.Context, s string) (*grpc.ClientConn, error) {
 		return grpc.DialContext(ctx, s, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	})
 
-	resolverBuilder := reflection.NewResolverBuilder(logger, connPool, &reflection.ResolverOpts{
+	resolverBuilder := reflection.NewResolverBuilder(connPool, reflection.ResolverOpts{
+		Logger:       logger,
 		PollInterval: time.Second * 5,
 	})
 
-	router := route.NewServiceRouter(logger, connPool)
+	router := routing.NewServiceRouter(connPool, routing.ServiceRouterOpts{Logger: logger})
 
-	grpcProxyServer := grpcproxy.NewServer(logger, router)
+	grpcProxy := grpcbridge.NewGRPCProxy(router, grpcbridge.GPRCProxyOpts{Logger: logger})
 
 	for _, cfg := range cfg.Services {
 		_ = connPool.Build(context.Background(), cfg.Name, cfg.Target)
@@ -84,7 +86,7 @@ func mainImpl() error {
 		lw := &loggingWatcher{logger: logger}
 		rw := router.Watcher(cfg.Name)
 
-		_, err = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.DiscoveryWatcher{lw, rw}})
+		_, err = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, rw}})
 		if err != nil {
 			logger.Error("Failed to build resolver", "error", err)
 			return err
@@ -97,7 +99,7 @@ func mainImpl() error {
 		return err
 	}
 
-	grpcServer := grpc.NewServer(grpc.UnknownServiceHandler(grpcProxyServer.Handler))
+	grpcServer := grpc.NewServer(grpcProxy.AsOption())
 
 	go func() {
 		_ = grpcServer.Serve(lis)

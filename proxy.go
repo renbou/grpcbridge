@@ -1,48 +1,66 @@
-package grpcproxy
+package grpcbridge
 
 import (
+	"context"
 	"io"
 
-	"github.com/renbou/grpcbridge"
+	"github.com/renbou/grpcbridge/bridgedesc"
+	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
-	"github.com/renbou/grpcbridge/route"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// Assertion to make sure that Handler can be registered as valid gRPC stream handler.
-var _ grpc.StreamHandler = (*Server)(nil).Handler
+var _ grpc.StreamHandler = (*GRPCProxy)(nil).StreamHandler
 
-type Server struct {
-	logger grpcbridge.Logger
-	router *route.ServiceRouter
+type GRPCRouter interface {
+	RouteGRPC(context.Context) (grpcadapter.Connection, *bridgedesc.Method, error)
 }
 
-func NewServer(logger grpcbridge.Logger, router *route.ServiceRouter) *Server {
-	return &Server{
-		logger: logger.WithComponent("grpcbridge.proxy.grpc"),
+type GPRCProxyOpts struct {
+	Logger bridgelog.Logger
+}
+
+func (o GPRCProxyOpts) withDefaults() GPRCProxyOpts {
+	if o.Logger == nil {
+		o.Logger = defaultGRPCProxyOpts.Logger
+	}
+
+	return o
+}
+
+var defaultGRPCProxyOpts = &GPRCProxyOpts{
+	Logger: bridgelog.Discard(),
+}
+
+type GRPCProxy struct {
+	logger bridgelog.Logger
+	router GRPCRouter
+}
+
+func NewGRPCProxy(router GRPCRouter, opts GPRCProxyOpts) *GRPCProxy {
+	opts = opts.withDefaults()
+
+	return &GRPCProxy{
+		logger: opts.Logger.WithComponent("grpcbridge.proxy.grpc"),
 		router: router,
 	}
 }
 
-func (s *Server) Handler(_ any, incoming grpc.ServerStream) error {
-	methodName, ok := grpc.Method(incoming.Context())
-	if !ok {
-		s.logger.Error("no method name in stream context, unable to route request")
-		return status.Errorf(codes.Internal, "no method name in stream context, unable to route request")
-	}
+func (s *GRPCProxy) AsOption() grpc.ServerOption {
+	return grpc.UnknownServiceHandler(s.StreamHandler)
+}
 
-	logger := s.logger.With("method", methodName)
-
-	conn, err := s.router.Route(methodName)
+func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
+	conn, desc, err := s.router.RouteGRPC(incoming.Context())
 	if err != nil {
 		return err
 	}
 
+	logger := s.logger.With("method", desc.RPCName)
+
 	// TODO(renbou): timeouts for stream initiation and Recv/Sends
-	outgoing, err := conn.BiDiStream(incoming.Context(), methodName)
+	outgoing, err := conn.BiDiStream(incoming.Context(), desc.RPCName)
 	if err != nil {
 		return err
 	}
@@ -101,7 +119,7 @@ type proxyingError struct {
 	outgoingErr error
 }
 
-func (s *Server) forwardIncomingToOutgoing(logger grpcbridge.Logger, incoming grpc.ServerStream, outgoing *grpcadapter.BiDiStream) proxyingError {
+func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming grpc.ServerStream, outgoing grpcadapter.BiDiStream) proxyingError {
 	defer logger.Debug("ending forwarding incoming to outgoing")
 
 	for {
@@ -118,7 +136,7 @@ func (s *Server) forwardIncomingToOutgoing(logger grpcbridge.Logger, incoming gr
 	}
 }
 
-func (s *Server) forwardOutgoingToIncoming(logger grpcbridge.Logger, outgoing *grpcadapter.BiDiStream, incoming grpc.ServerStream) proxyingError {
+func (s *GRPCProxy) forwardOutgoingToIncoming(logger bridgelog.Logger, outgoing grpcadapter.BiDiStream, incoming grpc.ServerStream) proxyingError {
 	defer logger.Debug("ending forwarding outgoing to incoming")
 
 	for {

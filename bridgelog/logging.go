@@ -1,4 +1,4 @@
-package grpcbridge
+package bridgelog
 
 type PlainLogger interface {
 	Debug(string, ...any)
@@ -26,15 +26,6 @@ type Logger interface {
 //	}
 func WrapPlainLogger[T PlainLogger](logger T) Logger {
 	return &wrappedLogger[T]{underlying: logger}
-}
-
-type Config struct {
-	Services map[string]ServiceConfig
-}
-
-type ServiceConfig struct {
-	Name   string
-	Target string
 }
 
 type wrappedLogger[T PlainLogger] struct {

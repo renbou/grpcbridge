@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/renbou/grpcbridge"
 )
 
 func testpath(filename string) string {
@@ -17,32 +16,30 @@ func Test_ReadHCL(t *testing.T) {
 
 	tests := []struct {
 		filename   string
-		wantConfig *grpcbridge.Config
+		wantConfig *Bridge
 	}{
 		{
 			filename: "config-single.hcl",
-			wantConfig: &grpcbridge.Config{
-				Services: map[string]grpcbridge.ServiceConfig{
-					"test": {
-						Name:   "test",
-						Target: "127.0.0.1:50051",
-					},
-				},
+			wantConfig: &Bridge{
+				Services: []Service{{
+					Name:   "test",
+					Target: "127.0.0.1:50051",
+				}},
 			},
 		},
 		{
 			filename: "config-multiple.hcl",
-			wantConfig: &grpcbridge.Config{
-				Services: map[string]grpcbridge.ServiceConfig{
-					"testsvc1": {
+			wantConfig: &Bridge{
+				Services: []Service{
+					{
 						Name:   "testsvc1",
 						Target: "127.0.0.1:50052",
 					},
-					"testsvc2": {
+					{
 						Name:   "testsvc2",
 						Target: "scheme://testsvc2:grpc",
 					},
-					"testsvc3": {
+					{
 						Name:   "testsvc3",
 						Target: "https://127.0.0.1:50054",
 					},
@@ -51,13 +48,13 @@ func Test_ReadHCL(t *testing.T) {
 		},
 		{
 			filename: "config-json.json",
-			wantConfig: &grpcbridge.Config{
-				Services: map[string]grpcbridge.ServiceConfig{
-					"testsvc": {
+			wantConfig: &Bridge{
+				Services: []Service{
+					{
 						Name:   "testsvc",
 						Target: "localhost:50051",
 					},
-					"anothersvc": {
+					{
 						Name:   "anothersvc",
 						Target: "localhost:50052",
 					},
