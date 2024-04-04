@@ -2,61 +2,77 @@ syntax = "proto3";
 
 package gotestapi.v1;
 
-service EchoService {
-  // UnaryEcho is a single-request single-response handler.
-  // The message specified in the request is returned in the response.
-  rpc UnaryEcho(UnaryEchoRequest) returns (UnaryEchoResponse);
+// The fake/unused v1alpha proto is imported to validate that grpcbridge properly
+// handles imports containing services not actually running on the server.
+import "proto/gotestapi/v1alpha/gotestapi.proto";
 
-  // ClientStreamEcho takes in a stream of client requests containing lists of messages,
-  // and then returns a single response containing an accumulated list of all the messages.
-  rpc ClientStreamEcho(stream ClientStreamEchoRequest) returns (ClientStreamEchoResponse);
+// VeggieShopService is a simple example API used for demonstrating basic unary & streaming capabilities of grpcbridge.
+service VeggieShopService {
+  // CreateShop is a unary RPC used to create a new example shop.
+  rpc CreateShop(CreateShopRequest) returns (CreateShopResponse);
 
-  // ServerStreamEcho returns one or more responses for the client request,
-  // each response containing the message from the request, and the 0-based
-  // index specifying how many times this message has been already repeated.
-  rpc ServerStreamEcho(ServerStreamEchoRequest) returns (stream ServerStreamEchoResponse);
+  // GetShopStats is a unary RPC used to get some purchase stats about a created shop.
+  // If no shop with the specified ID exists, a NotFound status code is returned.
+  rpc GetShopStats(GetStatsRequest) returns (GetStatsResponse);
 
-  // BiDiStreamEcho returns a single response for each client request,
-  // containing the exact field and content that was sent by the client.
-  rpc BiDiStreamEcho(stream BiDiStreamEchoRequest) returns (stream BiDiStreamEchoResponse);
+  // BuildPurchase is a client-streaming RPC used by a client to dynamically build a purchase.
+  // It dynamically updates the shop's state and can be monitored using MonitorShop.
+  // If no shop with the specified ID exists, a NotFound status code is returned.
+  // If the client sends requests in the stream with different shop IDs, a FailedPrecondition status code is returned.
+  rpc BuildPurchase(stream BuildPurchaseRequest) returns (BuildPurchaseResponse);
+
+  // MonitorShop is a server-streaming RPC used to monitor a shop's state (planned & created purchases).
+  // If no shop with the specified ID exists, a NotFound status code is returned.
+  rpc MonitorShop(MonitorShopRequest) returns (stream MonitorShopResponse);
 }
 
-message UnaryEchoRequest {
-  string message = 1;
+// QuantifiedVeggie is needed because proto3 doesn't support maps with enum as key.
+message QuantifiedVeggie {
+  gotestapi.v1alpha.Veggie veggie = 1;
+  uint32 quantity = 2;
 }
 
-message UnaryEchoResponse {
-  string message = 1;
+message CreateShopRequest {}
+
+message CreateShopResponse {
+  string shop_id = 1;
 }
 
-message ClientStreamEchoRequest {
-  repeated string messages = 1;
+message GetStatsRequest {
+  string shop_id = 1;
 }
 
-message ClientStreamEchoResponse {
-  repeated string accumulated = 1;
+message GetStatsResponse {
+  repeated QuantifiedVeggie purchased_veggies = 1;
 }
 
-message ServerStreamEchoRequest {
-  string message = 1;
-  int32 repeat = 2;
-}
+message BuildPurchaseRequest {
+  string shop_id = 1;
 
-message ServerStreamEchoResponse {
-  string message = 1;
-  int32 index = 2;
-}
-
-message BiDiStreamEchoRequest {
-  oneof message {
-    string text = 1;
-    bytes data = 2;
+  oneof action {
+    gotestapi.v1alpha.Veggie add = 2;
+    gotestapi.v1alpha.Veggie remove = 3;
   }
 }
 
-message BiDiStreamEchoResponse {
-  oneof message {
-    string text = 1;
-    bytes data = 2;
+message BuildPurchaseResponse {
+  repeated QuantifiedVeggie purchased_veggies = 1;
+}
+
+message MonitorShopRequest {
+  string shop_id = 1;
+}
+
+message MonitorShopResponse {
+  message Purchase {
+    repeated QuantifiedVeggie veggies = 1;
+  }
+
+  string user = 1;
+
+  oneof action {
+    gotestapi.v1alpha.Veggie add = 2;
+    gotestapi.v1alpha.Veggie remove = 3;
+    Purchase purchase = 4;
   }
 }

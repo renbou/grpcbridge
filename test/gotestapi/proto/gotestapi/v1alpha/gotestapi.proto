@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package gotestapi.v1alpha;
+
+// VeggieShop is an example service which is deprecated for v1.
+service VeggieShop {
+  rpc CreatePurchase(CreatePurchaseRequest) returns (CreatePurchaseResponse);
+}
+
+// Veggie declared here to be imported by v1 package.
+enum Veggie {
+  UNKNOWN = 0;
+  CARROT = 1;
+  TOMATO = 2;
+  CUCUMBER = 3;
+  POTATO = 4;
+}
+
+message CreatePurchaseRequest {
+  Veggie veggie = 1;
+  int32 quantity = 2;
+}
+
+message CreatePurchaseResponse {
+  string purchase_id = 1;
+}
+

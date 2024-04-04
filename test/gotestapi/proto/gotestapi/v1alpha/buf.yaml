@@ -1,0 +1,4 @@
+version: v1alpha
+lint:
+  use:
+    - DEFAULT

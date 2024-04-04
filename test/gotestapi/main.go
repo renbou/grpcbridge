@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,79 +15,16 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 )
 
-type TestService struct {
-	gotestapiv1.UnimplementedEchoServiceServer
-}
-
-func (s *TestService) UnaryEcho(ctx context.Context, req *gotestapiv1.UnaryEchoRequest) (*gotestapiv1.UnaryEchoResponse, error) {
-	return &gotestapiv1.UnaryEchoResponse{
-		Message: req.Message,
-	}, nil
-}
-
-func (s *TestService) ClientStreamEcho(stream gotestapiv1.EchoService_ClientStreamEchoServer) error {
-	var messages []string
-
-	for {
-		req, err := stream.Recv()
-		if err == io.EOF {
-			return stream.SendAndClose(&gotestapiv1.ClientStreamEchoResponse{
-				Accumulated: messages,
-			})
-		} else if err != nil {
-			return status.Errorf(codes.Internal, "receiving client message: %s", err)
-		}
-
-		messages = append(messages, req.Messages...)
-	}
-}
-
-func (s *TestService) ServerStreamEcho(req *gotestapiv1.ServerStreamEchoRequest, stream gotestapiv1.EchoService_ServerStreamEchoServer) error {
-	for i := range req.Repeat {
-		if err := stream.Send(&gotestapiv1.ServerStreamEchoResponse{
-			Message: req.Message,
-			Index:   int32(i),
-		}); err != nil {
-			return status.Errorf(codes.Internal, "sending server stream message: %s", err)
-		}
-	}
-
-	return nil
-}
-
-func (s *TestService) BiDiStreamEcho(stream gotestapiv1.EchoService_BiDiStreamEchoServer) error {
-	for {
-		req, err := stream.Recv()
-		if err == io.EOF {
-			return nil
-		} else if err != nil {
-			return status.Errorf(codes.Internal, "receiving client message: %s", err)
-		}
-
-		response := &gotestapiv1.BiDiStreamEchoResponse{}
-
-		switch x := req.Message.(type) {
-		case *gotestapiv1.BiDiStreamEchoRequest_Text:
-			response.Message = &gotestapiv1.BiDiStreamEchoResponse_Text{Text: x.Text}
-		case *gotestapiv1.BiDiStreamEchoRequest_Data:
-			response.Message = &gotestapiv1.BiDiStreamEchoResponse_Data{Data: x.Data}
-		default:
-			return status.Errorf(codes.InvalidArgument, "unknown message type %T", x)
-		}
-
-		if err := stream.Send(response); err != nil {
-			return status.Errorf(codes.Internal, "sending bi-di stream message: %s", err)
-		}
-	}
-}
-
 func main() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("app", "gotestapi"))
+	logLevel := slog.LevelInfo
+	if strings.ToLower(os.Getenv("LOG_LEVEL")) == "debug" {
+		logLevel = slog.LevelDebug
+	}
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})).With("app", "gotestapi"))
 
 	listenAddr := ":50051"
 	if value, ok := os.LookupEnv("LISTEN_ADDR"); ok {
@@ -109,8 +46,11 @@ func main() {
 		grpc.ChainStreamInterceptor(logging.StreamServerInterceptor(gRPCLogger)),
 	)
 
+	service := new(veggieShopService)
+	go service.cleaner()
+
 	// Register only v1 gRPC reflection. grpcbridge should properly handle such cases.
-	gotestapiv1.RegisterEchoServiceServer(server, &TestService{})
+	gotestapiv1.RegisterVeggieShopServiceServer(server, service)
 	reflection.RegisterV1(server)
 
 	go func() {

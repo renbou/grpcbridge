@@ -19,88 +19,97 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	EchoService_UnaryEcho_FullMethodName        = "/gotestapi.v1.EchoService/UnaryEcho"
-	EchoService_ClientStreamEcho_FullMethodName = "/gotestapi.v1.EchoService/ClientStreamEcho"
-	EchoService_ServerStreamEcho_FullMethodName = "/gotestapi.v1.EchoService/ServerStreamEcho"
-	EchoService_BiDiStreamEcho_FullMethodName   = "/gotestapi.v1.EchoService/BiDiStreamEcho"
+	VeggieShopService_CreateShop_FullMethodName    = "/gotestapi.v1.VeggieShopService/CreateShop"
+	VeggieShopService_GetShopStats_FullMethodName  = "/gotestapi.v1.VeggieShopService/GetShopStats"
+	VeggieShopService_BuildPurchase_FullMethodName = "/gotestapi.v1.VeggieShopService/BuildPurchase"
+	VeggieShopService_MonitorShop_FullMethodName   = "/gotestapi.v1.VeggieShopService/MonitorShop"
 )
 
-// EchoServiceClient is the client API for EchoService service.
+// VeggieShopServiceClient is the client API for VeggieShopService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type EchoServiceClient interface {
-	// UnaryEcho is a single-request single-response handler.
-	// The message specified in the request is returned in the response.
-	UnaryEcho(ctx context.Context, in *UnaryEchoRequest, opts ...grpc.CallOption) (*UnaryEchoResponse, error)
-	// ClientStreamEcho takes in a stream of client requests containing lists of messages,
-	// and then returns a single response containing an accumulated list of all the messages.
-	ClientStreamEcho(ctx context.Context, opts ...grpc.CallOption) (EchoService_ClientStreamEchoClient, error)
-	// ServerStreamEcho returns one or more responses for the client request,
-	// each response containing the message from the request, and the 0-based
-	// index specifying how many times this message has been already repeated.
-	ServerStreamEcho(ctx context.Context, in *ServerStreamEchoRequest, opts ...grpc.CallOption) (EchoService_ServerStreamEchoClient, error)
-	// BiDiStreamEcho returns a single response for each client request,
-	// containing the exact field and content that was sent by the client.
-	BiDiStreamEcho(ctx context.Context, opts ...grpc.CallOption) (EchoService_BiDiStreamEchoClient, error)
+type VeggieShopServiceClient interface {
+	// CreateShop is a unary RPC used to create a new example shop.
+	CreateShop(ctx context.Context, in *CreateShopRequest, opts ...grpc.CallOption) (*CreateShopResponse, error)
+	// GetShopStats is a unary RPC used to get some purchase stats about a created shop.
+	// If no shop with the specified ID exists, a NotFound status code is returned.
+	GetShopStats(ctx context.Context, in *GetStatsRequest, opts ...grpc.CallOption) (*GetStatsResponse, error)
+	// BuildPurchase is a client-streaming RPC used by a client to dynamically build a purchase.
+	// It dynamically updates the shop's state and can be monitored using MonitorShop.
+	// If no shop with the specified ID exists, a NotFound status code is returned.
+	// If the client sends requests in the stream with different shop IDs, a FailedPrecondition status code is returned.
+	BuildPurchase(ctx context.Context, opts ...grpc.CallOption) (VeggieShopService_BuildPurchaseClient, error)
+	// MonitorShop is a server-streaming RPC used to monitor a shop's state (planned & created purchases).
+	// If no shop with the specified ID exists, a NotFound status code is returned.
+	MonitorShop(ctx context.Context, in *MonitorShopRequest, opts ...grpc.CallOption) (VeggieShopService_MonitorShopClient, error)
 }
 
-type echoServiceClient struct {
+type veggieShopServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewEchoServiceClient(cc grpc.ClientConnInterface) EchoServiceClient {
-	return &echoServiceClient{cc}
+func NewVeggieShopServiceClient(cc grpc.ClientConnInterface) VeggieShopServiceClient {
+	return &veggieShopServiceClient{cc}
 }
 
-func (c *echoServiceClient) UnaryEcho(ctx context.Context, in *UnaryEchoRequest, opts ...grpc.CallOption) (*UnaryEchoResponse, error) {
-	out := new(UnaryEchoResponse)
-	err := c.cc.Invoke(ctx, EchoService_UnaryEcho_FullMethodName, in, out, opts...)
+func (c *veggieShopServiceClient) CreateShop(ctx context.Context, in *CreateShopRequest, opts ...grpc.CallOption) (*CreateShopResponse, error) {
+	out := new(CreateShopResponse)
+	err := c.cc.Invoke(ctx, VeggieShopService_CreateShop_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *echoServiceClient) ClientStreamEcho(ctx context.Context, opts ...grpc.CallOption) (EchoService_ClientStreamEchoClient, error) {
-	stream, err := c.cc.NewStream(ctx, &EchoService_ServiceDesc.Streams[0], EchoService_ClientStreamEcho_FullMethodName, opts...)
+func (c *veggieShopServiceClient) GetShopStats(ctx context.Context, in *GetStatsRequest, opts ...grpc.CallOption) (*GetStatsResponse, error) {
+	out := new(GetStatsResponse)
+	err := c.cc.Invoke(ctx, VeggieShopService_GetShopStats_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &echoServiceClientStreamEchoClient{stream}
+	return out, nil
+}
+
+func (c *veggieShopServiceClient) BuildPurchase(ctx context.Context, opts ...grpc.CallOption) (VeggieShopService_BuildPurchaseClient, error) {
+	stream, err := c.cc.NewStream(ctx, &VeggieShopService_ServiceDesc.Streams[0], VeggieShopService_BuildPurchase_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &veggieShopServiceBuildPurchaseClient{stream}
 	return x, nil
 }
 
-type EchoService_ClientStreamEchoClient interface {
-	Send(*ClientStreamEchoRequest) error
-	CloseAndRecv() (*ClientStreamEchoResponse, error)
+type VeggieShopService_BuildPurchaseClient interface {
+	Send(*BuildPurchaseRequest) error
+	CloseAndRecv() (*BuildPurchaseResponse, error)
 	grpc.ClientStream
 }
 
-type echoServiceClientStreamEchoClient struct {
+type veggieShopServiceBuildPurchaseClient struct {
 	grpc.ClientStream
 }
 
-func (x *echoServiceClientStreamEchoClient) Send(m *ClientStreamEchoRequest) error {
+func (x *veggieShopServiceBuildPurchaseClient) Send(m *BuildPurchaseRequest) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *echoServiceClientStreamEchoClient) CloseAndRecv() (*ClientStreamEchoResponse, error) {
+func (x *veggieShopServiceBuildPurchaseClient) CloseAndRecv() (*BuildPurchaseResponse, error) {
 	if err := x.ClientStream.CloseSend(); err != nil {
 		return nil, err
 	}
-	m := new(ClientStreamEchoResponse)
+	m := new(BuildPurchaseResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func (c *echoServiceClient) ServerStreamEcho(ctx context.Context, in *ServerStreamEchoRequest, opts ...grpc.CallOption) (EchoService_ServerStreamEchoClient, error) {
-	stream, err := c.cc.NewStream(ctx, &EchoService_ServiceDesc.Streams[1], EchoService_ServerStreamEcho_FullMethodName, opts...)
+func (c *veggieShopServiceClient) MonitorShop(ctx context.Context, in *MonitorShopRequest, opts ...grpc.CallOption) (VeggieShopService_MonitorShopClient, error) {
+	stream, err := c.cc.NewStream(ctx, &VeggieShopService_ServiceDesc.Streams[1], VeggieShopService_MonitorShop_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &echoServiceServerStreamEchoClient{stream}
+	x := &veggieShopServiceMonitorShopClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -110,222 +119,181 @@ func (c *echoServiceClient) ServerStreamEcho(ctx context.Context, in *ServerStre
 	return x, nil
 }
 
-type EchoService_ServerStreamEchoClient interface {
-	Recv() (*ServerStreamEchoResponse, error)
+type VeggieShopService_MonitorShopClient interface {
+	Recv() (*MonitorShopResponse, error)
 	grpc.ClientStream
 }
 
-type echoServiceServerStreamEchoClient struct {
+type veggieShopServiceMonitorShopClient struct {
 	grpc.ClientStream
 }
 
-func (x *echoServiceServerStreamEchoClient) Recv() (*ServerStreamEchoResponse, error) {
-	m := new(ServerStreamEchoResponse)
+func (x *veggieShopServiceMonitorShopClient) Recv() (*MonitorShopResponse, error) {
+	m := new(MonitorShopResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func (c *echoServiceClient) BiDiStreamEcho(ctx context.Context, opts ...grpc.CallOption) (EchoService_BiDiStreamEchoClient, error) {
-	stream, err := c.cc.NewStream(ctx, &EchoService_ServiceDesc.Streams[2], EchoService_BiDiStreamEcho_FullMethodName, opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &echoServiceBiDiStreamEchoClient{stream}
-	return x, nil
-}
-
-type EchoService_BiDiStreamEchoClient interface {
-	Send(*BiDiStreamEchoRequest) error
-	Recv() (*BiDiStreamEchoResponse, error)
-	grpc.ClientStream
-}
-
-type echoServiceBiDiStreamEchoClient struct {
-	grpc.ClientStream
-}
-
-func (x *echoServiceBiDiStreamEchoClient) Send(m *BiDiStreamEchoRequest) error {
-	return x.ClientStream.SendMsg(m)
-}
-
-func (x *echoServiceBiDiStreamEchoClient) Recv() (*BiDiStreamEchoResponse, error) {
-	m := new(BiDiStreamEchoResponse)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-// EchoServiceServer is the server API for EchoService service.
-// All implementations must embed UnimplementedEchoServiceServer
+// VeggieShopServiceServer is the server API for VeggieShopService service.
+// All implementations must embed UnimplementedVeggieShopServiceServer
 // for forward compatibility
-type EchoServiceServer interface {
-	// UnaryEcho is a single-request single-response handler.
-	// The message specified in the request is returned in the response.
-	UnaryEcho(context.Context, *UnaryEchoRequest) (*UnaryEchoResponse, error)
-	// ClientStreamEcho takes in a stream of client requests containing lists of messages,
-	// and then returns a single response containing an accumulated list of all the messages.
-	ClientStreamEcho(EchoService_ClientStreamEchoServer) error
-	// ServerStreamEcho returns one or more responses for the client request,
-	// each response containing the message from the request, and the 0-based
-	// index specifying how many times this message has been already repeated.
-	ServerStreamEcho(*ServerStreamEchoRequest, EchoService_ServerStreamEchoServer) error
-	// BiDiStreamEcho returns a single response for each client request,
-	// containing the exact field and content that was sent by the client.
-	BiDiStreamEcho(EchoService_BiDiStreamEchoServer) error
-	mustEmbedUnimplementedEchoServiceServer()
+type VeggieShopServiceServer interface {
+	// CreateShop is a unary RPC used to create a new example shop.
+	CreateShop(context.Context, *CreateShopRequest) (*CreateShopResponse, error)
+	// GetShopStats is a unary RPC used to get some purchase stats about a created shop.
+	// If no shop with the specified ID exists, a NotFound status code is returned.
+	GetShopStats(context.Context, *GetStatsRequest) (*GetStatsResponse, error)
+	// BuildPurchase is a client-streaming RPC used by a client to dynamically build a purchase.
+	// It dynamically updates the shop's state and can be monitored using MonitorShop.
+	// If no shop with the specified ID exists, a NotFound status code is returned.
+	// If the client sends requests in the stream with different shop IDs, a FailedPrecondition status code is returned.
+	BuildPurchase(VeggieShopService_BuildPurchaseServer) error
+	// MonitorShop is a server-streaming RPC used to monitor a shop's state (planned & created purchases).
+	// If no shop with the specified ID exists, a NotFound status code is returned.
+	MonitorShop(*MonitorShopRequest, VeggieShopService_MonitorShopServer) error
+	mustEmbedUnimplementedVeggieShopServiceServer()
 }
 
-// UnimplementedEchoServiceServer must be embedded to have forward compatible implementations.
-type UnimplementedEchoServiceServer struct {
+// UnimplementedVeggieShopServiceServer must be embedded to have forward compatible implementations.
+type UnimplementedVeggieShopServiceServer struct {
 }
 
-func (UnimplementedEchoServiceServer) UnaryEcho(context.Context, *UnaryEchoRequest) (*UnaryEchoResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UnaryEcho not implemented")
+func (UnimplementedVeggieShopServiceServer) CreateShop(context.Context, *CreateShopRequest) (*CreateShopResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateShop not implemented")
 }
-func (UnimplementedEchoServiceServer) ClientStreamEcho(EchoService_ClientStreamEchoServer) error {
-	return status.Errorf(codes.Unimplemented, "method ClientStreamEcho not implemented")
+func (UnimplementedVeggieShopServiceServer) GetShopStats(context.Context, *GetStatsRequest) (*GetStatsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetShopStats not implemented")
 }
-func (UnimplementedEchoServiceServer) ServerStreamEcho(*ServerStreamEchoRequest, EchoService_ServerStreamEchoServer) error {
-	return status.Errorf(codes.Unimplemented, "method ServerStreamEcho not implemented")
+func (UnimplementedVeggieShopServiceServer) BuildPurchase(VeggieShopService_BuildPurchaseServer) error {
+	return status.Errorf(codes.Unimplemented, "method BuildPurchase not implemented")
 }
-func (UnimplementedEchoServiceServer) BiDiStreamEcho(EchoService_BiDiStreamEchoServer) error {
-	return status.Errorf(codes.Unimplemented, "method BiDiStreamEcho not implemented")
+func (UnimplementedVeggieShopServiceServer) MonitorShop(*MonitorShopRequest, VeggieShopService_MonitorShopServer) error {
+	return status.Errorf(codes.Unimplemented, "method MonitorShop not implemented")
 }
-func (UnimplementedEchoServiceServer) mustEmbedUnimplementedEchoServiceServer() {}
+func (UnimplementedVeggieShopServiceServer) mustEmbedUnimplementedVeggieShopServiceServer() {}
 
-// UnsafeEchoServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to EchoServiceServer will
+// UnsafeVeggieShopServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to VeggieShopServiceServer will
 // result in compilation errors.
-type UnsafeEchoServiceServer interface {
-	mustEmbedUnimplementedEchoServiceServer()
+type UnsafeVeggieShopServiceServer interface {
+	mustEmbedUnimplementedVeggieShopServiceServer()
 }
 
-func RegisterEchoServiceServer(s grpc.ServiceRegistrar, srv EchoServiceServer) {
-	s.RegisterService(&EchoService_ServiceDesc, srv)
+func RegisterVeggieShopServiceServer(s grpc.ServiceRegistrar, srv VeggieShopServiceServer) {
+	s.RegisterService(&VeggieShopService_ServiceDesc, srv)
 }
 
-func _EchoService_UnaryEcho_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UnaryEchoRequest)
+func _VeggieShopService_CreateShop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateShopRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EchoServiceServer).UnaryEcho(ctx, in)
+		return srv.(VeggieShopServiceServer).CreateShop(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EchoService_UnaryEcho_FullMethodName,
+		FullMethod: VeggieShopService_CreateShop_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EchoServiceServer).UnaryEcho(ctx, req.(*UnaryEchoRequest))
+		return srv.(VeggieShopServiceServer).CreateShop(ctx, req.(*CreateShopRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EchoService_ClientStreamEcho_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(EchoServiceServer).ClientStreamEcho(&echoServiceClientStreamEchoServer{stream})
+func _VeggieShopService_GetShopStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VeggieShopServiceServer).GetShopStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VeggieShopService_GetShopStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VeggieShopServiceServer).GetShopStats(ctx, req.(*GetStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
-type EchoService_ClientStreamEchoServer interface {
-	SendAndClose(*ClientStreamEchoResponse) error
-	Recv() (*ClientStreamEchoRequest, error)
+func _VeggieShopService_BuildPurchase_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(VeggieShopServiceServer).BuildPurchase(&veggieShopServiceBuildPurchaseServer{stream})
+}
+
+type VeggieShopService_BuildPurchaseServer interface {
+	SendAndClose(*BuildPurchaseResponse) error
+	Recv() (*BuildPurchaseRequest, error)
 	grpc.ServerStream
 }
 
-type echoServiceClientStreamEchoServer struct {
+type veggieShopServiceBuildPurchaseServer struct {
 	grpc.ServerStream
 }
 
-func (x *echoServiceClientStreamEchoServer) SendAndClose(m *ClientStreamEchoResponse) error {
+func (x *veggieShopServiceBuildPurchaseServer) SendAndClose(m *BuildPurchaseResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func (x *echoServiceClientStreamEchoServer) Recv() (*ClientStreamEchoRequest, error) {
-	m := new(ClientStreamEchoRequest)
+func (x *veggieShopServiceBuildPurchaseServer) Recv() (*BuildPurchaseRequest, error) {
+	m := new(BuildPurchaseRequest)
 	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func _EchoService_ServerStreamEcho_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ServerStreamEchoRequest)
+func _VeggieShopService_MonitorShop_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(MonitorShopRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(EchoServiceServer).ServerStreamEcho(m, &echoServiceServerStreamEchoServer{stream})
+	return srv.(VeggieShopServiceServer).MonitorShop(m, &veggieShopServiceMonitorShopServer{stream})
 }
 
-type EchoService_ServerStreamEchoServer interface {
-	Send(*ServerStreamEchoResponse) error
+type VeggieShopService_MonitorShopServer interface {
+	Send(*MonitorShopResponse) error
 	grpc.ServerStream
 }
 
-type echoServiceServerStreamEchoServer struct {
+type veggieShopServiceMonitorShopServer struct {
 	grpc.ServerStream
 }
 
-func (x *echoServiceServerStreamEchoServer) Send(m *ServerStreamEchoResponse) error {
+func (x *veggieShopServiceMonitorShopServer) Send(m *MonitorShopResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func _EchoService_BiDiStreamEcho_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(EchoServiceServer).BiDiStreamEcho(&echoServiceBiDiStreamEchoServer{stream})
-}
-
-type EchoService_BiDiStreamEchoServer interface {
-	Send(*BiDiStreamEchoResponse) error
-	Recv() (*BiDiStreamEchoRequest, error)
-	grpc.ServerStream
-}
-
-type echoServiceBiDiStreamEchoServer struct {
-	grpc.ServerStream
-}
-
-func (x *echoServiceBiDiStreamEchoServer) Send(m *BiDiStreamEchoResponse) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func (x *echoServiceBiDiStreamEchoServer) Recv() (*BiDiStreamEchoRequest, error) {
-	m := new(BiDiStreamEchoRequest)
-	if err := x.ServerStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-// EchoService_ServiceDesc is the grpc.ServiceDesc for EchoService service.
+// VeggieShopService_ServiceDesc is the grpc.ServiceDesc for VeggieShopService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var EchoService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "gotestapi.v1.EchoService",
-	HandlerType: (*EchoServiceServer)(nil),
+var VeggieShopService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "gotestapi.v1.VeggieShopService",
+	HandlerType: (*VeggieShopServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "UnaryEcho",
-			Handler:    _EchoService_UnaryEcho_Handler,
+			MethodName: "CreateShop",
+			Handler:    _VeggieShopService_CreateShop_Handler,
+		},
+		{
+			MethodName: "GetShopStats",
+			Handler:    _VeggieShopService_GetShopStats_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "ClientStreamEcho",
-			Handler:       _EchoService_ClientStreamEcho_Handler,
+			StreamName:    "BuildPurchase",
+			Handler:       _VeggieShopService_BuildPurchase_Handler,
 			ClientStreams: true,
 		},
 		{
-			StreamName:    "ServerStreamEcho",
-			Handler:       _EchoService_ServerStreamEcho_Handler,
+			StreamName:    "MonitorShop",
+			Handler:       _VeggieShopService_MonitorShop_Handler,
 			ServerStreams: true,
-		},
-		{
-			StreamName:    "BiDiStreamEcho",
-			Handler:       _EchoService_BiDiStreamEcho_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/gotestapi/v1/gotestapi.proto",
