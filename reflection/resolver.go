@@ -37,7 +37,7 @@ type ResolverOpts struct {
 	// False by default.
 	OnlyServices bool
 	// Limit on the depth of the dependency chain of the retrieved file descriptors when working
-	// with misbehaving servers such as python grpclib which do not return the whole transitive dependency chain when asked to.
+	// with misbehaving servers such as python grpclib (see https://github.com/vmagamedov/grpclib/issues/187) which do not return the whole transitive dependency chain when asked to.
 	// 100 by default, 0 minimum (only a single FileContainingSymbol request will be made and it will be expected to return the whole dependency chain).
 	RecursionLimit int
 }
@@ -108,15 +108,20 @@ type resolver struct {
 	logger  bridgelog.Logger
 	pool    *grpcadapter.DialedPool
 	watcher Watcher
-	done    chan struct{}
+	// hash of all file descriptors retrieved on the previous iteration
+	lastProtoHash string
+	// hash of all service names retrieved on the previous iteration,
+	// needed additionally to lastProtoHash because proto files aren't retrieved when OnlyServices is true
+	lastServicesHash string
+	done             chan struct{}
 }
 
 func (r *resolver) watch() {
 	for {
 		state, err := r.resolve()
-		if err == nil {
+		if err == nil && state != nil { // state is nil when it hasn't changed
 			r.watcher.UpdateDesc(state)
-		} else {
+		} else if err != nil {
 			r.watcher.ReportError(err)
 			r.logger.Error("resolution unrecoverably failed, will retry again later", "error", err)
 		}
@@ -161,13 +166,25 @@ func (r *resolver) resolve() (*bridgedesc.Target, error) {
 		return nil, err
 	}
 
-	descriptors, err := r.fileDescriptorsBySymbols(client, serviceNames)
+	// Attempt to retrieve file descriptors solely using FileContainingSymbol requests.
+	// Most valid implementations should return the whole set here.
+	descriptors, bundles, err := r.fileDescriptorsBySymbols(client, serviceNames)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := r.retrieveDependencies(client, descriptors); err != nil {
+	// Additionally check that we actually got the whole set of file descriptors along with any dependencies.
+	// If not, try to iteratively retrieve the set of missed dependencies via FileByFilename requests.
+	if err := r.retrieveDependencies(client, descriptors, &bundles); err != nil {
 		return nil, err
+	}
+
+	newProtoHash := hashNamedProtoBundles(bundles)
+	newServicesHash := hashServiceNames(serviceNames)
+
+	if r.lastProtoHash == newProtoHash && r.lastServicesHash == newServicesHash {
+		r.logger.Debug("resolver received the same file descriptors and service names as the previous iteration, skipping update", "proto_hash", newProtoHash, "services_hash", newServicesHash)
+		return nil, nil
 	}
 
 	parsed, err := parseFileDescriptors(serviceNames, descriptors)
@@ -176,6 +193,11 @@ func (r *resolver) resolve() (*bridgedesc.Target, error) {
 	} else if !r.opts.OnlyServices && len(parsed.missingServices) > 0 {
 		r.logger.Warn("resolver received file descriptors with missing gRPC service definitions", "missing_services", parsed.missingServices)
 	}
+
+	// Save the hash only at the end, when we can be sure that the new set is fully valid.
+	r.lastProtoHash = newProtoHash
+	r.lastServicesHash = newServicesHash
+	r.logger.Debug("resolver successfully updated file descriptors", "proto_hash", newProtoHash, "services_hash", newServicesHash)
 
 	return parsed.targetDesc, nil
 }
@@ -216,14 +238,14 @@ func (r *resolver) listServiceNames(c *client) ([]protoreflect.FullName, error) 
 }
 
 // fileDescriptorsBySymbols returns a parsed and deduplicated list of file descriptors for the specified symbols.
-func (r *resolver) fileDescriptorsBySymbols(c *client, symbols []protoreflect.FullName) (*descriptorpb.FileDescriptorSet, error) {
+func (r *resolver) fileDescriptorsBySymbols(c *client, symbols []protoreflect.FullName) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
 	return r.fileDescriptors(func() ([][]byte, error) {
 		return c.fileDescriptorsBySymbols(symbols)
 	})
 }
 
 // fileDescriptorsByFilenames returns a parsed and deduplicated list of file descriptors for the specified filenames.
-func (r *resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*descriptorpb.FileDescriptorSet, error) {
+func (r *resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
 	return r.fileDescriptors(func() ([][]byte, error) {
 		return c.fileDescriptorsByFilenames(filenames)
 	})
@@ -232,7 +254,7 @@ func (r *resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*d
 // retrieveDependencies attempts to perform a BFS traversal of the file descriptors' dependency graph,
 // retrieving all the missing file descriptors via FileByFilename reflection requests.
 // This is needed because some
-func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.FileDescriptorSet) error {
+func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.FileDescriptorSet, bundles *[]namedProtoBundle) error {
 	present := make(map[string]struct{}, len(descriptors.File))
 	missing := make(map[string]struct{}, len(descriptors.File))
 
@@ -247,7 +269,7 @@ func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 			missingList = append(missingList, dep)
 		}
 
-		depDescriptors, err := r.fileDescriptorsByFilenames(c, missingList)
+		depDescriptors, depBundles, err := r.fileDescriptorsByFilenames(c, missingList)
 		if err != nil {
 			return err
 		}
@@ -261,6 +283,7 @@ func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 
 		growMissingDescriptorSet(depDescriptors, present, missing)
 		descriptors.File = append(descriptors.File, depDescriptors.File...)
+		*bundles = append(*bundles, depBundles...)
 	}
 
 	if len(missing) > 0 {
@@ -270,27 +293,27 @@ func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 	return nil
 }
 
-func (r *resolver) fileDescriptors(f func() ([][]byte, error)) (*descriptorpb.FileDescriptorSet, error) {
+func (r *resolver) fileDescriptors(f func() ([][]byte, error)) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
 	// This empty set will be handled properly, all services will be simply returned without any labeled methods.
 	if r.opts.OnlyServices {
-		return &descriptorpb.FileDescriptorSet{}, nil
+		return &descriptorpb.FileDescriptorSet{}, nil, nil
 	}
 
 	protoBytes, err := f()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	processed := make(map[string]struct{}, len(protoBytes))
 	set := &descriptorpb.FileDescriptorSet{File: make([]*descriptorpb.FileDescriptorProto, 0, len(protoBytes))}
+	bundle := make([]namedProtoBundle, 0, len(protoBytes))
 
-	// TODO(renbou): deduplicate parsing by caching the parsed descriptors by hashes of the bytes?
-	// in 99% of the cases, the same file descriptors will be returned, since it's not like protos change that often.
-	// maybe even completely avoid sending the update to the watcher when nothing has changed...
+	// TODO(renbou): this part can be benchmarked and optimized *probably* using vtproto, since we just need to decode a barebones proto file.
+	// TODO(renbou): provide a tradeoff of memory/cpu by having optional caching of parsed protofiles? probably only after optimizing the parsing itself though.
 	for _, bytes := range protoBytes {
 		fd := new(descriptorpb.FileDescriptorProto)
 		if err := proto.Unmarshal(bytes, fd); err != nil {
-			return nil, fmt.Errorf("unmarshaling file descriptor: %w", err)
+			return nil, nil, fmt.Errorf("unmarshaling file descriptor: %w", err)
 		}
 
 		// duplicate files can be received and it's okay as said in the comment for client.fileDescriptorsBySymbols,
@@ -300,7 +323,8 @@ func (r *resolver) fileDescriptors(f func() ([][]byte, error)) (*descriptorpb.Fi
 		}
 
 		set.File = append(set.File, fd)
+		bundle = append(bundle, namedProtoBundle{name: fd.GetName(), proto: bytes})
 	}
 
-	return set, nil
+	return set, bundle, nil
 }
