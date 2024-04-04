@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 )
 
@@ -106,7 +107,39 @@ func (cc *AdaptedClientConn) getConn(ctx context.Context) (*grpc.ClientConn, err
 	case <-cc.dialedCh:
 	}
 
+	if cc.conn == nil {
+		return nil, cc.err
+	}
+
+	// Try waiting for the connection to recover if it has failed.
+	// This helps to avoid returning errors to client requests and gRPC reflection resolver
+	// when the service has just started or when some random error occurs.
+	if err := cc.waitForReady(ctx); err != nil {
+		return nil, err
+	}
+
 	return cc.conn, cc.err
+}
+
+func (cc *AdaptedClientConn) waitForReady(ctx context.Context) error {
+	state := cc.conn.GetState()
+
+	// State will be IDLE first if something happened to the connection.
+	// gRPC won't attempt a reconnect unless something happens,
+	// like this manual call telling gRPC "hey, we will need a connection here!".
+	if state == connectivity.Idle {
+		cc.conn.Connect()
+	}
+
+	for state != connectivity.Ready {
+		if !cc.conn.WaitForStateChange(ctx, state) {
+			return ctxRPCErr(ctx.Err())
+		}
+
+		state = cc.conn.GetState()
+	}
+
+	return nil
 }
 
 // close needs to be called while cc.mu is held.
