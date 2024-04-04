@@ -8,7 +8,6 @@ import (
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var _ grpc.StreamHandler = (*GRPCProxy)(nil).StreamHandler
@@ -72,11 +71,11 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 	o2iErrCh := make(chan proxyingError, 1)
 
 	go func() {
-		i2oErrCh <- s.forwardIncomingToOutgoing(logger, incoming, outgoing)
+		i2oErrCh <- s.forwardIncomingToOutgoing(logger, incoming, outgoing, desc.Input)
 	}()
 
 	go func() {
-		o2iErrCh <- s.forwardOutgoingToIncoming(logger, outgoing, incoming)
+		o2iErrCh <- s.forwardOutgoingToIncoming(logger, outgoing, incoming, desc.Output)
 	}()
 
 	// Handle proxying errors and return them when needed,
@@ -119,12 +118,11 @@ type proxyingError struct {
 	outgoingErr error
 }
 
-func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming grpc.ServerStream, outgoing grpcadapter.BiDiStream) proxyingError {
+func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming grpc.ServerStream, outgoing grpcadapter.BiDiStream, message bridgedesc.Message) proxyingError {
 	defer logger.Debug("ending forwarding incoming to outgoing")
 
 	for {
-		// Proto properly unmarshals any message into an empty one, keeping all the fields as protoimpl.UnknownFields.
-		msg := new(emptypb.Empty)
+		msg := message.New()
 
 		if err := incoming.RecvMsg(msg); err != nil {
 			return proxyingError{incomingErr: err}
@@ -136,11 +134,11 @@ func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming 
 	}
 }
 
-func (s *GRPCProxy) forwardOutgoingToIncoming(logger bridgelog.Logger, outgoing grpcadapter.BiDiStream, incoming grpc.ServerStream) proxyingError {
+func (s *GRPCProxy) forwardOutgoingToIncoming(logger bridgelog.Logger, outgoing grpcadapter.BiDiStream, incoming grpc.ServerStream, message bridgedesc.Message) proxyingError {
 	defer logger.Debug("ending forwarding outgoing to incoming")
 
 	for {
-		msg := new(emptypb.Empty)
+		msg := message.New()
 
 		if err := outgoing.Recv(incoming.Context(), msg); err != nil {
 			return proxyingError{outgoingErr: err}

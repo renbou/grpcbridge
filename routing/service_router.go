@@ -35,6 +35,9 @@ type ServiceRouter struct {
 	logger bridgelog.Logger
 
 	// protects the routing info
+	// TODO(renbou): separate synchronization mechanisms for these maps, since only the routes are needed for actual routing,
+	// 	and can be kept as a sync.Map, while svcRoutes are used just to remove the unnecessary routes,
+	//  and also don't require a full lock to be held at all times.
 	mu sync.Mutex
 	// map from gRPC service name to the target name, used for actually routing requests.
 	routes map[protoreflect.FullName]string

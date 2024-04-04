@@ -10,7 +10,9 @@ import (
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
 	reflectionpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 type ConnPool interface {
@@ -23,34 +25,47 @@ type Watcher interface {
 }
 
 type ResolverOpts struct {
-	Logger       bridgelog.Logger
+	Logger bridgelog.Logger
+	// 5 minutes by default, 1 second minimum.
 	PollInterval time.Duration
-	ReqTimeout   time.Duration
+	// 10 seconds by default, 1ms minimum.
+	ReqTimeout time.Duration
 	// Prefixes of service names to ignore additionally to administrative gRPC services (grpc.health, grpc.reflection, grpc.channelz, ...).
 	IgnorePrefixes []string
+	// Request only service names without the full method/message definitions.
+	// Suitable only for use with pure-proto marshaling/unmarshaling, which retains all the unknown fields.
+	// False by default.
+	OnlyServices bool
+	// Limit on the depth of the dependency chain of the retrieved file descriptors when working
+	// with misbehaving servers such as python grpclib which do not return the whole transitive dependency chain when asked to.
+	// 100 by default, 0 minimum (only a single FileContainingSymbol request will be made and it will be expected to return the whole dependency chain).
+	RecursionLimit int
 }
 
 func (opts ResolverOpts) withDefaults() ResolverOpts {
 	if opts.Logger == nil {
-		opts.Logger = defaultResolverOpts.Logger
+		opts.Logger = bridgelog.Discard()
 	}
 
 	if opts.PollInterval == 0 {
-		opts.PollInterval = defaultResolverOpts.PollInterval
+		opts.PollInterval = 5 * time.Minute
+	} else if opts.PollInterval < time.Second {
+		opts.PollInterval = time.Second
 	}
 
 	if opts.ReqTimeout == 0 {
-		opts.ReqTimeout = defaultResolverOpts.ReqTimeout
+		opts.ReqTimeout = 10 * time.Second
+	} else if opts.ReqTimeout < time.Millisecond {
+		opts.ReqTimeout = time.Millisecond
+	}
+
+	if opts.RecursionLimit == 0 {
+		opts.RecursionLimit = 100
+	} else if opts.RecursionLimit < 0 {
+		opts.RecursionLimit = 0
 	}
 
 	return opts
-}
-
-var defaultResolverOpts = ResolverOpts{
-	Logger:         bridgelog.Discard(),
-	PollInterval:   5 * time.Minute,
-	ReqTimeout:     10 * time.Second,
-	IgnorePrefixes: nil,
 }
 
 type ResolverBuilder struct {
@@ -103,7 +118,7 @@ func (r *resolver) watch() {
 			r.watcher.UpdateDesc(state)
 		} else {
 			r.watcher.ReportError(err)
-			r.logger.Error("Resolution unrecoverably failed, will retry again later", "error", err)
+			r.logger.Error("resolution unrecoverably failed, will retry again later", "error", err)
 		}
 
 		select {
@@ -141,39 +156,151 @@ func (r *resolver) resolve() (*bridgedesc.Target, error) {
 
 	defer client.close()
 
-	services, err := r.listServiceNames(client)
+	serviceNames, err := r.listServiceNames(client)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO(renbou): discover methods, messages, etc for each service.
-	return &bridgedesc.Target{Services: services}, nil
+	descriptors, err := r.fileDescriptorsBySymbols(client, serviceNames)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.retrieveDependencies(client, descriptors); err != nil {
+		return nil, err
+	}
+
+	parsed, err := parseFileDescriptors(serviceNames, descriptors)
+	if err != nil {
+		return nil, err
+	} else if !r.opts.OnlyServices && len(parsed.missingServices) > 0 {
+		r.logger.Warn("resolver received file descriptors with missing gRPC service definitions", "missing_services", parsed.missingServices)
+	}
+
+	return parsed.targetDesc, nil
 }
 
-func (r *resolver) listServiceNames(c *client) ([]bridgedesc.Service, error) {
-	services, err := c.listServices()
+// listServiceNames returns a deduplicated and validates list of service names.
+func (r *resolver) listServiceNames(c *client) ([]protoreflect.FullName, error) {
+	services, err := c.listServiceNames()
 	if err != nil {
 		return nil, err
 	}
 
-	// Avoid raising an error when an invalid service name is encountered,
+	// Avoid raising an error when an invalid or duplicate service name is encountered,
 	// simply ignoring it is better than completely stopping metadata discovery.
-	filtered := make([]bridgedesc.Service, 0, len(services))
+	processed := make(map[protoreflect.FullName]struct{}, len(services))
+	filteredNames := make([]protoreflect.FullName, 0, len(services))
 	for _, s := range services {
 		fullName := protoreflect.FullName(s)
 		if !fullName.IsValid() {
-			r.logger.Warn("Resolver received invalid gRPC service name", "service", s)
+			r.logger.Warn("resolver received invalid gRPC service name", "service", fullName)
+			continue
+		} else if _, ok := processed[fullName]; ok {
+			r.logger.Warn("resolver received duplicate gRPC service name", "service", fullName)
 			continue
 		}
 
+		processed[fullName] = struct{}{}
+
 		index := slices.IndexFunc(r.opts.IgnorePrefixes, func(prefix string) bool {
-			return strings.HasPrefix(s, prefix)
+			return strings.HasPrefix(string(fullName), prefix)
 		})
 
 		if index == -1 {
-			filtered = append(filtered, bridgedesc.Service{Name: fullName})
+			filteredNames = append(filteredNames, fullName)
 		}
 	}
 
-	return filtered, nil
+	return filteredNames, nil
+}
+
+// fileDescriptorsBySymbols returns a parsed and deduplicated list of file descriptors for the specified symbols.
+func (r *resolver) fileDescriptorsBySymbols(c *client, symbols []protoreflect.FullName) (*descriptorpb.FileDescriptorSet, error) {
+	return r.fileDescriptors(func() ([][]byte, error) {
+		return c.fileDescriptorsBySymbols(symbols)
+	})
+}
+
+// fileDescriptorsByFilenames returns a parsed and deduplicated list of file descriptors for the specified filenames.
+func (r *resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*descriptorpb.FileDescriptorSet, error) {
+	return r.fileDescriptors(func() ([][]byte, error) {
+		return c.fileDescriptorsByFilenames(filenames)
+	})
+}
+
+// retrieveDependencies attempts to perform a BFS traversal of the file descriptors' dependency graph,
+// retrieving all the missing file descriptors via FileByFilename reflection requests.
+// This is needed because some
+func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.FileDescriptorSet) error {
+	present := make(map[string]struct{}, len(descriptors.File))
+	missing := make(map[string]struct{}, len(descriptors.File))
+
+	updatePresentDescriptorSet(descriptors, present)
+	growMissingDescriptorSet(descriptors, present, missing)
+
+	var missingList []string
+
+	for i := 0; i < r.opts.RecursionLimit && len(missing) > 0; i++ {
+		missingList = slices.Grow(missingList, len(missing))
+		for dep := range missing {
+			missingList = append(missingList, dep)
+		}
+
+		depDescriptors, err := r.fileDescriptorsByFilenames(c, missingList)
+		if err != nil {
+			return err
+		}
+
+		updatePresentDescriptorSet(depDescriptors, present)
+		shrinkMissingDescriptorSet(depDescriptors, missing)
+
+		if len(missing) > 0 {
+			return fmt.Errorf("server didn't provide file descriptors with paths %q while performing recursive dependency retrieval", missing)
+		}
+
+		growMissingDescriptorSet(depDescriptors, present, missing)
+		descriptors.File = append(descriptors.File, depDescriptors.File...)
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("failed to retrieve all file descriptors' dependencies in %d attempts", r.opts.RecursionLimit)
+	}
+
+	return nil
+}
+
+func (r *resolver) fileDescriptors(f func() ([][]byte, error)) (*descriptorpb.FileDescriptorSet, error) {
+	// This empty set will be handled properly, all services will be simply returned without any labeled methods.
+	if r.opts.OnlyServices {
+		return &descriptorpb.FileDescriptorSet{}, nil
+	}
+
+	protoBytes, err := f()
+	if err != nil {
+		return nil, err
+	}
+
+	processed := make(map[string]struct{}, len(protoBytes))
+	set := &descriptorpb.FileDescriptorSet{File: make([]*descriptorpb.FileDescriptorProto, 0, len(protoBytes))}
+
+	// TODO(renbou): deduplicate parsing by caching the parsed descriptors by hashes of the bytes?
+	// in 99% of the cases, the same file descriptors will be returned, since it's not like protos change that often.
+	// maybe even completely avoid sending the update to the watcher when nothing has changed...
+	for _, bytes := range protoBytes {
+		fd := new(descriptorpb.FileDescriptorProto)
+		if err := proto.Unmarshal(bytes, fd); err != nil {
+			return nil, fmt.Errorf("unmarshaling file descriptor: %w", err)
+		}
+
+		// duplicate files can be received and it's okay as said in the comment for client.fileDescriptorsBySymbols,
+		// but we need to deduplicate them to actually parse them without errors into protoregistry.Files
+		if _, ok := processed[fd.GetName()]; ok {
+			continue
+		}
+
+		set.File = append(set.File, fd)
+	}
+
+	return set, nil
 }
