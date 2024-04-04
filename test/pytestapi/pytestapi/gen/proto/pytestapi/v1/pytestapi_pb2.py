@@ -12,10 +12,12 @@ from google.protobuf.internal import builder as _builder
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 from google.protobuf import wrappers_pb2 as google_dot_protobuf_dot_wrappers__pb2
+from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"proto/pytestapi/v1/pytestapi.proto\x12\x0cpytestapi.v1\x1a\x1egoogle/protobuf/wrappers.proto\"\x96\x01\n\x10UnaryWrapRequest\x12!\n\x0cstring_value\x18\x01 \x01(\tR\x0bstringValue\x12\x1f\n\x0bint32_value\x18\x02 \x01(\x05R\nint32Value\x12\x1f\n\x0b\x66loat_value\x18\x03 \x01(\x02R\nfloatValue\x12\x1d\n\nbool_value\x18\x04 \x01(\x08R\tboolValue\"\x8b\x02\n\x11UnaryWrapResponse\x12?\n\x0cstring_value\x18\x01 \x01(\x0b\x32\x1c.google.protobuf.StringValueR\x0bstringValue\x12<\n\x0bint32_value\x18\x02 \x01(\x0b\x32\x1b.google.protobuf.Int32ValueR\nint32Value\x12<\n\x0b\x66loat_value\x18\x03 \x01(\x0b\x32\x1b.google.protobuf.FloatValueR\nfloatValue\x12\x39\n\nbool_value\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.BoolValueR\tboolValue2^\n\x0eWrapperService\x12L\n\tUnaryWrap\x12\x1e.pytestapi.v1.UnaryWrapRequest\x1a\x1f.pytestapi.v1.UnaryWrapResponseBs\n\x10\x63om.pytestapi.v1B\x0ePytestapiProtoP\x01\xa2\x02\x03PXX\xaa\x02\x0cPytestapi.V1\xca\x02\x0cPytestapi\\V1\xe2\x02\x18Pytestapi\\V1\\GPBMetadata\xea\x02\rPytestapi::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"proto/pytestapi/v1/pytestapi.proto\x12\x0cpytestapi.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1egoogle/protobuf/wrappers.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd3\x01\n\x05\x45vent\x12\x41\n\x0fmotion_detected\x18\x01 \x01(\x0b\x32\x16.google.protobuf.EmptyH\x00R\x0emotionDetected\x12=\n\x0b\x64oor_opened\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.BoolValueH\x00R\ndoorOpened\x12?\n\x0btemperature\x18\x03 \x01(\x0b\x32\x1b.google.protobuf.FloatValueH\x00R\x0btemperatureB\x07\n\x05\x65vent\"@\n\x13StreamEventsRequest\x12)\n\x05\x65vent\x18\x01 \x01(\x0b\x32\x13.pytestapi.v1.EventR\x05\x65vent\"m\n\x14StreamEventsResponse\x12*\n\x02ts\x18\x01 \x01(\x0b\x32\x1a.google.protobuf.TimestampR\x02ts\x12)\n\x05\x65vent\x18\x02 \x01(\x0b\x32\x13.pytestapi.v1.EventR\x05\x65vent2m\n\x10IOTEventsService\x12Y\n\x0cStreamEvents\x12!.pytestapi.v1.StreamEventsRequest\x1a\".pytestapi.v1.StreamEventsResponse(\x01\x30\x01\x42s\n\x10\x63om.pytestapi.v1B\x0ePytestapiProtoP\x01\xa2\x02\x03PXX\xaa\x02\x0cPytestapi.V1\xca\x02\x0cPytestapi\\V1\xe2\x02\x18Pytestapi\\V1\\GPBMetadata\xea\x02\rPytestapi::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -23,10 +25,12 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'proto.pytestapi.v1.pytestap
 if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['DESCRIPTOR']._options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\020com.pytestapi.v1B\016PytestapiProtoP\001\242\002\003PXX\252\002\014Pytestapi.V1\312\002\014Pytestapi\\V1\342\002\030Pytestapi\\V1\\GPBMetadata\352\002\rPytestapi::V1'
-  _globals['_UNARYWRAPREQUEST']._serialized_start=85
-  _globals['_UNARYWRAPREQUEST']._serialized_end=235
-  _globals['_UNARYWRAPRESPONSE']._serialized_start=238
-  _globals['_UNARYWRAPRESPONSE']._serialized_end=505
-  _globals['_WRAPPERSERVICE']._serialized_start=507
-  _globals['_WRAPPERSERVICE']._serialized_end=601
+  _globals['_EVENT']._serialized_start=147
+  _globals['_EVENT']._serialized_end=358
+  _globals['_STREAMEVENTSREQUEST']._serialized_start=360
+  _globals['_STREAMEVENTSREQUEST']._serialized_end=424
+  _globals['_STREAMEVENTSRESPONSE']._serialized_start=426
+  _globals['_STREAMEVENTSRESPONSE']._serialized_end=535
+  _globals['_IOTEVENTSSERVICE']._serialized_start=537
+  _globals['_IOTEVENTSSERVICE']._serialized_end=646
 # @@protoc_insertion_point(module_scope)

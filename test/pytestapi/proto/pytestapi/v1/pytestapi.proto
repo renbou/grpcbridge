@@ -2,24 +2,31 @@ syntax = "proto3";
 
 package pytestapi.v1;
 
+// Well-known imports to test grpcbridge's ability to handle multiple imports & slightly more complex messages.
+import "google/protobuf/empty.proto";
 import "google/protobuf/wrappers.proto";
+import "google/protobuf/timestamp.proto";
 
-service WrapperService {
-  // UnaryWrap is a single-request single-response handler.
-  // The values specified in the request are returned in their wrapped form in the response.
-  rpc UnaryWrap(UnaryWrapRequest) returns (UnaryWrapResponse);
+// IOTEventsService is an example API used for demonstrating bidirectional streaming via grpcbridge.
+service IOTEventsService {
+  // StreamEvents is a bi-directional streaming RPC that allows a client
+  // to both emit new events and monitor the occurring events. 
+  rpc StreamEvents(stream StreamEventsRequest) returns (stream StreamEventsResponse);
 }
 
-message UnaryWrapRequest {
-  string string_value = 1;
-  int32 int32_value = 2;
-  float float_value = 3;
-  bool bool_value = 4;
+message Event {
+  oneof event {
+    google.protobuf.Empty motion_detected = 1;
+    google.protobuf.BoolValue door_opened = 2;
+    google.protobuf.FloatValue temperature = 3;
+  }
 }
 
-message UnaryWrapResponse {
-  google.protobuf.StringValue string_value = 1;
-  google.protobuf.Int32Value int32_value = 2;
-  google.protobuf.FloatValue float_value = 3;
-  google.protobuf.BoolValue bool_value = 4;
+message StreamEventsRequest {
+  Event event = 1;
+}
+
+message StreamEventsResponse {
+  google.protobuf.Timestamp ts = 1;
+  Event event = 2;
 }

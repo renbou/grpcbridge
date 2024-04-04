@@ -9,33 +9,35 @@ import grpclib.client
 if typing.TYPE_CHECKING:
     import grpclib.server
 
+import google.protobuf.empty_pb2
 import google.protobuf.wrappers_pb2
+import google.protobuf.timestamp_pb2
 import proto.pytestapi.v1.pytestapi_pb2
 
 
-class WrapperServiceBase(abc.ABC):
+class IOTEventsServiceBase(abc.ABC):
 
     @abc.abstractmethod
-    async def UnaryWrap(self, stream: 'grpclib.server.Stream[proto.pytestapi.v1.pytestapi_pb2.UnaryWrapRequest, proto.pytestapi.v1.pytestapi_pb2.UnaryWrapResponse]') -> None:
+    async def StreamEvents(self, stream: 'grpclib.server.Stream[proto.pytestapi.v1.pytestapi_pb2.StreamEventsRequest, proto.pytestapi.v1.pytestapi_pb2.StreamEventsResponse]') -> None:
         pass
 
     def __mapping__(self) -> typing.Dict[str, grpclib.const.Handler]:
         return {
-            '/pytestapi.v1.WrapperService/UnaryWrap': grpclib.const.Handler(
-                self.UnaryWrap,
-                grpclib.const.Cardinality.UNARY_UNARY,
-                proto.pytestapi.v1.pytestapi_pb2.UnaryWrapRequest,
-                proto.pytestapi.v1.pytestapi_pb2.UnaryWrapResponse,
+            '/pytestapi.v1.IOTEventsService/StreamEvents': grpclib.const.Handler(
+                self.StreamEvents,
+                grpclib.const.Cardinality.STREAM_STREAM,
+                proto.pytestapi.v1.pytestapi_pb2.StreamEventsRequest,
+                proto.pytestapi.v1.pytestapi_pb2.StreamEventsResponse,
             ),
         }
 
 
-class WrapperServiceStub:
+class IOTEventsServiceStub:
 
     def __init__(self, channel: grpclib.client.Channel) -> None:
-        self.UnaryWrap = grpclib.client.UnaryUnaryMethod(
+        self.StreamEvents = grpclib.client.StreamStreamMethod(
             channel,
-            '/pytestapi.v1.WrapperService/UnaryWrap',
-            proto.pytestapi.v1.pytestapi_pb2.UnaryWrapRequest,
-            proto.pytestapi.v1.pytestapi_pb2.UnaryWrapResponse,
+            '/pytestapi.v1.IOTEventsService/StreamEvents',
+            proto.pytestapi.v1.pytestapi_pb2.StreamEventsRequest,
+            proto.pytestapi.v1.pytestapi_pb2.StreamEventsResponse,
         )

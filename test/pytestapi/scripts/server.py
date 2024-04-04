@@ -10,7 +10,7 @@ from grpclib.server import Server
 from grpclib.utils import graceful_exit
 from structlog.stdlib import BoundLogger
 
-from pytestapi import WrapperService
+from pytestapi import IOTEventsService
 
 logger: BoundLogger
 
@@ -58,7 +58,7 @@ async def run():
     host = host or None
     port = port or None
 
-    services = [WrapperService()]
+    services = [IOTEventsService()]
     services = ServerReflection.extend(services)
 
     server = Server(services)
