@@ -1,3 +1,11 @@
+// Package reflection provides a way to receive complete service descriptions via gRPC reflection suitable for use with grpcbridge's routers.
+// For more information regarding the gRPC reflection protocol, see the official "[GRPC Server Reflection Protocol]" spec.
+//
+// Both v1 and v1alpha reflection versions are supported,
+// with the resolver being able to switch between the two and remembering the previously used version.
+// See [Resolver] and [ResolverOpts] for more details and the available features.
+//
+// [GRPC Server Reflection Protocol]: https://github.com/grpc/grpc/blob/master/doc/server-reflection.md
 package reflection
 
 import (
@@ -5,11 +13,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"github.com/renbou/grpcbridge/internal/descparse"
 	"google.golang.org/grpc/codes"
 	reflectionpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
 	reflectionalphapb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
@@ -24,19 +35,29 @@ var reflectionMethods = []string{
 	reflectionalphapb.ServerReflection_ServerReflectionInfo_FullMethodName, // v1alpha
 }
 
+// ConnPool is implemented by [*grpcadapter.DialedPool] and is used by ResolverBuilder to retrieve connections.
 type ConnPool interface {
-	Get(target string) grpcadapter.Connection
+	Get(target string) grpcadapter.ClientConn
 }
 
+// Watcher defines the interface of a watcher which is notified by the resolver of updates.
 type Watcher interface {
+	// UpdateDesc is called when the resolver has successfully received new descriptions.
 	UpdateDesc(*bridgedesc.Target)
+	// ReportError is called when the resolver encounters an error, it can be safely ignored by the watcher.
 	ReportError(error)
 }
 
+// ResolverOpts define all the optional settings which can be set for resolvers.
 type ResolverOpts struct {
+	// Logs are discarded by default.
 	Logger bridgelog.Logger
 	// 5 minutes by default, 1 second minimum.
+	// A random jitter of +/-10% will be added to the interval to spread out all the polling
+	// requests resolvers have to do, avoiding spikes in resource usage.
 	PollInterval time.Duration
+	// If PollManually is true, ResolveNow has to be manually called for polling to happen.
+	PollManually bool
 	// 10 seconds by default, 1ms minimum.
 	ReqTimeout time.Duration
 	// Prefixes of service names to ignore additionally to administrative gRPC services (grpc.health, grpc.reflection, grpc.channelz, ...).
@@ -77,13 +98,17 @@ func (opts ResolverOpts) withDefaults() ResolverOpts {
 	return opts
 }
 
+// ResolverBuilder is a builder for [Resolver]s,
+// present to simplify their creation by moving all the shared parameters to the builder itself.
 type ResolverBuilder struct {
 	opts   ResolverOpts
 	logger bridgelog.Logger
-	pool   *grpcadapter.DialedPool
+	pool   ConnPool
 }
 
-func NewResolverBuilder(pool *grpcadapter.DialedPool, opts ResolverOpts) *ResolverBuilder {
+// NewResolverBuilder initializes a new [Resolver] builder with the specified connection pool and options,
+// both of which will be inherited by the resolvers later created using [ResolverBuilder.Build].
+func NewResolverBuilder(pool ConnPool, opts ResolverOpts) *ResolverBuilder {
 	opts = opts.withDefaults()
 
 	// additionally ignore gRPC services like reflection, health, channelz, etc.
@@ -96,27 +121,36 @@ func NewResolverBuilder(pool *grpcadapter.DialedPool, opts ResolverOpts) *Resolv
 	}
 }
 
-func (rb *ResolverBuilder) Build(name string, watcher Watcher) (*resolver, error) {
-	r := &resolver{
+// Build initializes a new [Resolver] for the specified target and launches its poller goroutine.
+// The new resolver will use the pool specified in [NewResolverBuilder] to retrieve connections to the target.
+func (rb *ResolverBuilder) Build(target string, watcher Watcher) (*Resolver, error) {
+	r := &Resolver{
 		opts:           rb.opts,
-		name:           name,
-		logger:         rb.logger.With("resolver.target", name),
+		target:         target,
+		logger:         rb.logger.With("resolver.target", target),
 		pool:           rb.pool,
 		watcher:        watcher,
 		methodPriority: slices.Clone(reflectionMethods),
 		done:           make(chan struct{}),
 	}
 
+	r.newResolveNow() // set a valid notifyResolveNow before returning the resolver
 	go r.watch()
 
 	return r, nil
 }
 
-type resolver struct {
+// Resolver is the gRPC reflection-based description resolver, initialized using a [ResolverBuilder].
+// It polls the target for which it was created for in a separate poller goroutine which is created during initialization,
+// and must be destroyed using [Resolver.Close] to avoid a goroutine leak.
+// By default polling happens with an interval specified by [ResolverOpts].PollInterval,
+// but this can be disabled by setting [ResolverOpts].PollManually to true,
+// in which case [Resolver.ResolveNow] can be used to trigger new polls.
+type Resolver struct {
 	opts    ResolverOpts
-	name    string
+	target  string
 	logger  bridgelog.Logger
-	pool    *grpcadapter.DialedPool
+	pool    ConnPool
 	watcher Watcher
 	// hash of all file descriptors retrieved on the previous iteration
 	lastProtoHash string
@@ -124,11 +158,35 @@ type resolver struct {
 	// needed additionally to lastProtoHash because proto files aren't retrieved when OnlyServices is true
 	lastServicesHash string
 	// methodPriority keeps a prioritized version of the global reflectionMethods list for this specific service
-	methodPriority []string
-	done           chan struct{}
+	methodPriority   []string
+	done             chan struct{}
+	notifyResolveNow atomic.Pointer[func()]
+	resolveNow       chan struct{}
 }
 
-func (r *resolver) watch() {
+// ResolveNow triggers a new poll to be performed after the current one, if any, is finished.
+// This method doesn't block and just writes a signal which will be handled by the poller goroutine in the background.
+func (r *Resolver) ResolveNow() {
+	(*r.notifyResolveNow.Load())()
+}
+
+// Close closes the resolver, releasing any associated resources (i.e. the poller goroutine).
+func (r *Resolver) Close() {
+	close(r.done)
+}
+
+func (r *Resolver) watch() {
+	// time.Ticker isn't used because we need the pollInterval to be *in between* polls,
+	// not to actually resolve once every pollInterval, which might
+	// lead to resolve() being called straight after the last one returning.
+	afterFunc := func() <-chan time.Time {
+		if r.opts.PollManually {
+			return nil
+		}
+
+		return time.After(r.opts.PollInterval)
+	}
+
 	for {
 		state, err := r.resolve()
 		if err == nil && state != nil { // state is nil when it hasn't changed
@@ -139,23 +197,28 @@ func (r *resolver) watch() {
 		}
 
 		select {
-		// time.Ticker isn't used because we need the pollInterval to be *in between* polls,
-		// not to actually resolve once every pollInterval, which might
-		// lead to resolve() being called straight after the last one returning.
-		case <-time.After(r.opts.PollInterval):
+		case <-afterFunc():
+		case <-r.resolveNow:
+			r.newResolveNow()
 		case <-r.done:
 			return
 		}
 	}
 }
 
-func (r *resolver) Close() {
-	close(r.done)
+func (r *Resolver) newResolveNow() {
+	r.resolveNow = make(chan struct{}) // no race because this is set/used during creation and in watch() only
+
+	// need atomic store because ResolveNow() can be called concurrently
+	f := sync.OnceFunc(func() {
+		close(r.resolveNow)
+	})
+	r.notifyResolveNow.Store(&f)
 }
 
 // resolve attempts to perform resolution using all of the available methods,
 // and remembers the one which succeeded to avoid having to complete unneeded requests the next time.
-func (r *resolver) resolve() (*bridgedesc.Target, error) {
+func (r *Resolver) resolve() (*bridgedesc.Target, error) {
 	var errs []error
 
 	for i, method := range r.methodPriority {
@@ -177,10 +240,10 @@ func (r *resolver) resolve() (*bridgedesc.Target, error) {
 	return nil, fmt.Errorf("all reflection methods failed: %w", errors.Join(errs...))
 }
 
-func (r *resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) {
-	cc := r.pool.Get(r.name)
+func (r *Resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) {
+	cc := r.pool.Get(r.target)
 	if cc == nil {
-		return nil, fmt.Errorf("no connection available in pool for target %q", r.name)
+		return nil, fmt.Errorf("no connection available in pool for target %q", r.target)
 	}
 
 	client, err := connectClient(r.opts.ReqTimeout, cc, method)
@@ -216,11 +279,11 @@ func (r *resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) 
 		return nil, nil
 	}
 
-	parsed, err := parseFileDescriptors(serviceNames, descriptors)
+	parsed, err := descparse.ParseFileDescriptors(serviceNames, descriptors)
 	if err != nil {
 		return nil, err
-	} else if !r.opts.OnlyServices && len(parsed.missingServices) > 0 {
-		r.logger.Warn("resolver received file descriptors with missing gRPC service definitions", "missing_services", parsed.missingServices)
+	} else if !r.opts.OnlyServices && len(parsed.MissingServices) > 0 {
+		r.logger.Warn("resolver received file descriptors with missing gRPC service definitions", "missing_services", parsed.MissingServices)
 	}
 
 	// Save the hash only at the end, when we can be sure that the new set is fully valid.
@@ -228,11 +291,11 @@ func (r *resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) 
 	r.lastServicesHash = newServicesHash
 	r.logger.Debug("resolver successfully updated file descriptors", "proto_hash", newProtoHash, "services_hash", newServicesHash)
 
-	return parsed.targetDesc, nil
+	return parsed.Desc, nil
 }
 
 // listServiceNames returns a deduplicated and validates list of service names.
-func (r *resolver) listServiceNames(c *client) ([]protoreflect.FullName, error) {
+func (r *Resolver) listServiceNames(c *client) ([]protoreflect.FullName, error) {
 	services, err := c.listServiceNames()
 	if err != nil {
 		return nil, err
@@ -267,14 +330,14 @@ func (r *resolver) listServiceNames(c *client) ([]protoreflect.FullName, error) 
 }
 
 // fileDescriptorsBySymbols returns a parsed and deduplicated list of file descriptors for the specified symbols.
-func (r *resolver) fileDescriptorsBySymbols(c *client, symbols []protoreflect.FullName) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
+func (r *Resolver) fileDescriptorsBySymbols(c *client, symbols []protoreflect.FullName) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
 	return r.fileDescriptors(func() ([][]byte, error) {
 		return c.fileDescriptorsBySymbols(symbols)
 	})
 }
 
 // fileDescriptorsByFilenames returns a parsed and deduplicated list of file descriptors for the specified filenames.
-func (r *resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
+func (r *Resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
 	return r.fileDescriptors(func() ([][]byte, error) {
 		return c.fileDescriptorsByFilenames(filenames)
 	})
@@ -283,7 +346,7 @@ func (r *resolver) fileDescriptorsByFilenames(c *client, filenames []string) (*d
 // retrieveDependencies attempts to perform a BFS traversal of the file descriptors' dependency graph,
 // retrieving all the missing file descriptors via FileByFilename reflection requests.
 // This is needed because some
-func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.FileDescriptorSet, bundles *[]namedProtoBundle) error {
+func (r *Resolver) retrieveDependencies(c *client, descriptors *descriptorpb.FileDescriptorSet, bundles *[]namedProtoBundle) error {
 	present := make(map[string]struct{}, len(descriptors.File))
 	missing := make(map[string]struct{}, len(descriptors.File))
 
@@ -322,7 +385,7 @@ func (r *resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 	return nil
 }
 
-func (r *resolver) fileDescriptors(f func() ([][]byte, error)) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
+func (r *Resolver) fileDescriptors(f func() ([][]byte, error)) (*descriptorpb.FileDescriptorSet, []namedProtoBundle, error) {
 	// This empty set will be handled properly, all services will be simply returned without any labeled methods.
 	if r.opts.OnlyServices {
 		return &descriptorpb.FileDescriptorSet{}, nil, nil

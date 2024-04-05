@@ -8,5 +8,5 @@ import (
 )
 
 type HTTPRouter interface {
-	RouteHTTP(*http.Request) (grpcadapter.Connection, *bridgedesc.Method, error)
+	RouteHTTP(*http.Request) (grpcadapter.ClientConn, *bridgedesc.Method, error)
 }

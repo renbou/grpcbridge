@@ -3,6 +3,7 @@ package reflection
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/renbou/grpcbridge/grpcadapter"
@@ -19,7 +20,7 @@ type client struct {
 	timeout time.Duration
 }
 
-func connectClient(timeout time.Duration, conn grpcadapter.Connection, method string) (*client, error) {
+func connectClient(timeout time.Duration, conn grpcadapter.ClientConn, method string) (*client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -61,7 +62,7 @@ func (c *client) listServiceNames() ([]string, error) {
 	}
 
 	resp := new(reflectionpb.ServerReflectionResponse)
-	if err := c.stream.Recv(ctx, resp); err != nil {
+	if err := c.recv(ctx, resp); err != nil {
 		return nil, fmt.Errorf("receiving response to ListServices request: %w", err)
 	}
 
@@ -93,7 +94,7 @@ func (c *client) fileDescriptorsBySymbols(serviceNames []protoreflect.FullName) 
 		}
 	}
 
-	return c.fileDescriptorsByRequests(requests, "FileContainingSymbol")
+	return c.execFileDescriptorRequests(requests, "FileContainingSymbol")
 }
 
 // fileDescriptorsByFilenames retrieves the file descriptors for all the given symbols using the FileByFilename request.
@@ -108,13 +109,13 @@ func (c *client) fileDescriptorsByFilenames(fileNames []string) ([][]byte, error
 		}
 	}
 
-	return c.fileDescriptorsByRequests(requests, "FileByFilename")
+	return c.execFileDescriptorRequests(requests, "FileByFilename")
 }
 
 // Sends/Recvs are made in parallel to minimize delays which would occur if done sequentially for all the symbols.
 // NB: the responses aren't deduplicated by any means, so the file descriptors need to be properly parsed and de-duped by name.
 // This is valid behaviour as specified in https://github.com/grpc/grpc/blob/aa67587bac54458464d38126c92d3a586a7c7a21/src/proto/grpc/reflection/v1/reflection.proto#L94.
-func (c *client) fileDescriptorsByRequests(requests []*reflectionpb.ServerReflectionRequest, name string) (res [][]byte, err error) {
+func (c *client) execFileDescriptorRequests(requests []*reflectionpb.ServerReflectionRequest, name string) ([][]byte, error) {
 	// avoid all this logic when it's not needed because why not?
 	if len(requests) == 0 {
 		return [][]byte{}, nil
@@ -124,15 +125,23 @@ func (c *client) fileDescriptorsByRequests(requests []*reflectionpb.ServerReflec
 	sendErr := make(chan error, 1)
 	recvErr := make(chan error, 1)
 
+	// wait for goroutines to exit to avoid any leaks
+	var wg sync.WaitGroup
+	wg.Add(2)
+	defer wg.Wait()
+
 	// single base context to cancel both goroutines when one fails
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go func() {
+		defer wg.Done()
 		sendErr <- c.fileDescriptorsRequester(ctx, semaphore, requests, name)
 	}()
 
+	var res [][]byte
 	go func() {
+		defer wg.Done()
 		recvd, err := c.fileDescriptorsReceiver(ctx, semaphore, requests, name)
 		recvErr <- err
 		res = recvd
@@ -141,6 +150,8 @@ func (c *client) fileDescriptorsByRequests(requests []*reflectionpb.ServerReflec
 	// If one of the goroutines fails prematurely, immediately return and cancel the context to stop the other one.
 	// Otherwise wait for both of the signals to arrive and return the result.
 	for range 2 {
+		var err error
+
 		select {
 		case err = <-sendErr:
 		case err = <-recvErr:
@@ -160,11 +171,7 @@ func (c *client) fileDescriptorsRequester(ctx context.Context, semaphore chan st
 			return fmt.Errorf("sending %s request %d/%d (%v): %w", name, i, len(requests), req, err)
 		}
 
-		select {
-		case semaphore <- struct{}{}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		semaphore <- struct{}{} // buffered channel
 	}
 
 	return nil
@@ -179,7 +186,7 @@ func (c *client) fileDescriptorsReceiver(ctx context.Context, semaphore chan str
 
 	// no validation of received files is performed here because any potential errors will be covered anyway during proto parsing and registry construction.
 	for i := range requests {
-		// wait for barrier #i to be released by the sender, otherwise we can start receiving before the request is sent.
+		// wait for barrier #i to be released by the sender, otherwise we would start waiting for a response before the request is sent.
 		select {
 		case <-semaphore:
 		case <-ctx.Done():

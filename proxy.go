@@ -13,7 +13,7 @@ import (
 var _ grpc.StreamHandler = (*GRPCProxy)(nil).StreamHandler
 
 type GRPCRouter interface {
-	RouteGRPC(context.Context) (grpcadapter.Connection, *bridgedesc.Method, error)
+	RouteGRPC(context.Context) (grpcadapter.ClientConn, *bridgedesc.Method, error)
 }
 
 type GPRCProxyOpts struct {

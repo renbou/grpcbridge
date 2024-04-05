@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package grpcbridge.internal.bridgetest.testpb;
+
+import "messages.proto";
+
+option go_package = "github.com/renbou/grpcbridge/internal/bridgetest/testpb";
+
+service TestService {
+  rpc UnaryUnbound(Scalars) returns (Scalars);
+}

@@ -3,3 +3,4 @@
 /vendor
 grpcbridge.hcl
 coverage.txt
+coverage.html

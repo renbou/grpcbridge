@@ -57,7 +57,7 @@ func NewServiceRouter(pool *grpcadapter.DialedPool, opts ServiceRouterOpts) *Ser
 	}
 }
 
-func (sr *ServiceRouter) RouteGRPC(ctx context.Context) (grpcadapter.Connection, *bridgedesc.Method, error) {
+func (sr *ServiceRouter) RouteGRPC(ctx context.Context) (grpcadapter.ClientConn, *bridgedesc.Method, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 

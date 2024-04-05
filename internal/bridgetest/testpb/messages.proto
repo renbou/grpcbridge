@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package grpcbridge.internal.bridgetest.testpb;
+
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/renbou/grpcbridge/internal/bridgetest/testpb";
+
+message Scalars {
+  bool bool_value = 1;
+  int32 int32_value = 2;
+  int64 int64_value = 3;
+  uint32 uint32_value = 4;
+  uint64 uint64_value = 5;
+  sint32 sint32_value = 6;
+  sint64 sint64_value = 7;
+  fixed32 fixed32_value = 8;
+  fixed64 fixed64_value = 9;
+  sfixed32 sfixed32_value = 10;
+  sfixed64 sfixed64_value = 11;
+  float float_value = 12;
+  double double_value = 13;
+  string string_value = 14;
+  bytes bytes_value = 15;
+}
+
+message NonScalars {
+  map<string, string> str2str_map = 1;
+  map<string, int32> str2int32_map = 2;
+  map<int32, google.protobuf.Empty> int2empty_map = 3;
+}
