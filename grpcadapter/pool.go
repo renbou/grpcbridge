@@ -39,14 +39,14 @@ func (p *DialedPool) Build(ctx context.Context, targetName, dialTarget string) *
 	conn = &DialedPoolController{
 		pool: p,
 		name: targetName,
-		conn: WrapConnection(unwrapped),
+		conn: WrapClientConn(unwrapped),
 	}
 	p.conns[targetName] = conn
 
 	return conn
 }
 
-func (p *DialedPool) Get(target string) Connection {
+func (p *DialedPool) Get(target string) ClientConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -71,7 +71,7 @@ type DialedPoolController struct {
 	pool *DialedPool
 
 	name   string
-	conn   Connection
+	conn   ClientConn
 	closed atomic.Bool
 }
 

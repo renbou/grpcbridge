@@ -89,8 +89,9 @@ func (cc *AdaptedClientConn) BiDiStream(ctx context.Context, method string) (*Ad
 	}
 
 	err = wrapped.withCtx(ctx, func() error {
-		wrapped.stream, err = conn.NewStream(streamCtx, &grpc.StreamDesc{ClientStreams: true, ServerStreams: true}, method)
-		return err
+		var newErr error
+		wrapped.stream, newErr = conn.NewStream(streamCtx, &grpc.StreamDesc{ClientStreams: true, ServerStreams: true}, method)
+		return newErr
 	})
 	if err != nil {
 		stErr := status.Convert(err)
@@ -114,14 +115,18 @@ func (cc *AdaptedClientConn) getConn(ctx context.Context) (*grpc.ClientConn, err
 	// Try waiting for the connection to recover if it has failed.
 	// This helps to avoid returning errors to client requests and gRPC reflection resolver
 	// when the service has just started or when some random error occurs.
-	if err := cc.waitForReady(ctx); err != nil {
-		return nil, err
-	}
+	// After waiting still try to use the connection to at least get a readable error describing the failure.
+	cc.waitForReady(ctx)
 
 	return cc.conn, cc.err
 }
 
-func (cc *AdaptedClientConn) waitForReady(ctx context.Context) error {
+func (cc *AdaptedClientConn) waitForReady(ctx context.Context) {
+	// No point in wasting all the available time.
+	// TODO(renbou): Add a "ConnectTimeout" setting to AdaptedClientConn and pool to have a default here when no timeout is set.
+	ctx, cancel := ctxWithHalvedDeadline(ctx)
+	defer cancel()
+
 	state := cc.conn.GetState()
 
 	// State will be IDLE first if something happened to the connection.
@@ -133,19 +138,16 @@ func (cc *AdaptedClientConn) waitForReady(ctx context.Context) error {
 
 	for state != connectivity.Ready {
 		if !cc.conn.WaitForStateChange(ctx, state) {
-			return ctxRPCErr(ctx.Err())
+			return
 		}
 
 		state = cc.conn.GetState()
 	}
-
-	return nil
 }
 
 // close needs to be called while cc.mu is held.
 func (cc *AdaptedClientConn) applyClose() {
-	// TODO: does this need logging? it only returns an error if called twice...
-	_ = cc.conn.Close()
+	_ = cc.conn.Close() // doesn't return any meaningful errors
 
 	// Clear conn and update error to avoid accidental use of connection after it has been closed.
 	cc.conn = nil

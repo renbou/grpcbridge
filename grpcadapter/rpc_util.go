@@ -2,6 +2,7 @@ package grpcadapter
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,4 +18,13 @@ func ctxRPCErr(err error) error {
 	}
 
 	return status.Error(codes.Unknown, err.Error())
+}
+
+func ctxWithHalvedDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+
+	return context.WithTimeout(ctx, time.Until(deadline)/2)
 }

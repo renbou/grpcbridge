@@ -6,9 +6,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var _ Connection = (*wrappedConnection[*AdaptedBiDiStream])(nil)
+var _ ClientConn = (*wrappedConnection[*AdaptedBiDiStream])(nil)
 
-type Connection interface {
+type ClientConn interface {
 	Close()
 	BiDiStream(ctx context.Context, method string) (BiDiStream, error)
 }
@@ -20,17 +20,17 @@ type BiDiStream interface {
 	Close()
 }
 
-type GenericConnection[BD BiDiStream] interface {
+type GenericClientConn[BD BiDiStream] interface {
 	Close()
 	BiDiStream(ctx context.Context, method string) (BD, error)
 }
 
-func WrapConnection[BD BiDiStream](conn GenericConnection[BD]) Connection {
+func WrapClientConn[BD BiDiStream](conn GenericClientConn[BD]) ClientConn {
 	return &wrappedConnection[BD]{conn}
 }
 
 type wrappedConnection[BD BiDiStream] struct {
-	conn GenericConnection[BD]
+	conn GenericClientConn[BD]
 }
 
 func (c *wrappedConnection[BD]) Close() {
