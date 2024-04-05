@@ -20,4 +20,4 @@ RUN \
   --mount=type=cache,target=/root/.cache/pypoetry \
   poetry install --no-interaction --no-ansi
 
-CMD ["poetry", "run", "pytestapi-server"]
+CMD ["poetry", "run", "--quiet", "pytestapi-server"]
