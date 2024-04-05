@@ -1,6 +1,7 @@
 package reflection
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,11 +10,19 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"google.golang.org/grpc/codes"
 	reflectionpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
+	reflectionalphapb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
+
+var reflectionMethods = []string{
+	reflectionpb.ServerReflection_ServerReflectionInfo_FullMethodName,      // v1
+	reflectionalphapb.ServerReflection_ServerReflectionInfo_FullMethodName, // v1alpha
+}
 
 type ConnPool interface {
 	Get(target string) grpcadapter.Connection
@@ -89,12 +98,13 @@ func NewResolverBuilder(pool *grpcadapter.DialedPool, opts ResolverOpts) *Resolv
 
 func (rb *ResolverBuilder) Build(name string, watcher Watcher) (*resolver, error) {
 	r := &resolver{
-		opts:    rb.opts,
-		name:    name,
-		logger:  rb.logger.With("resolver.target", name),
-		pool:    rb.pool,
-		watcher: watcher,
-		done:    make(chan struct{}),
+		opts:           rb.opts,
+		name:           name,
+		logger:         rb.logger.With("resolver.target", name),
+		pool:           rb.pool,
+		watcher:        watcher,
+		methodPriority: slices.Clone(reflectionMethods),
+		done:           make(chan struct{}),
 	}
 
 	go r.watch()
@@ -113,7 +123,9 @@ type resolver struct {
 	// hash of all service names retrieved on the previous iteration,
 	// needed additionally to lastProtoHash because proto files aren't retrieved when OnlyServices is true
 	lastServicesHash string
-	done             chan struct{}
+	// methodPriority keeps a prioritized version of the global reflectionMethods list for this specific service
+	methodPriority []string
+	done           chan struct{}
 }
 
 func (r *resolver) watch() {
@@ -141,20 +153,37 @@ func (r *resolver) Close() {
 	close(r.done)
 }
 
-// TODO(renbou): support v1alpha and v1 at the same time, using some mechanism like this:
-// - try v1
-// - if it fails, try v1alpha
-// - if it works, then remember this and use it the next time
-// - if it fails, return an error
-// Then if v1alpha starts failing, try switching to v1, and repeat.
-// NB: "fails" here means any error, not just "Unimplemented", because servers might misbehave in various ways.
+// resolve attempts to perform resolution using all of the available methods,
+// and remembers the one which succeeded to avoid having to complete unneeded requests the next time.
 func (r *resolver) resolve() (*bridgedesc.Target, error) {
+	var errs []error
+
+	for i, method := range r.methodPriority {
+		state, err := r.resolveWithMethod(method)
+		if status.Code(err) == codes.Unimplemented {
+			// Unimplemented can be returned by different implementations at different moments (connection, request, etc)
+			// which is why this check belongs here instead of the reflection client.
+			r.logger.Debug("resolution failed with Unimplemented status, will retry using different method", "method", method, "error", err)
+			errs = append(errs, err)
+			continue
+		} else if err == nil {
+			// Reprioritize the method since it worked.
+			r.methodPriority[0], r.methodPriority[i] = r.methodPriority[i], r.methodPriority[0]
+		}
+
+		return state, err
+	}
+
+	return nil, fmt.Errorf("all reflection methods failed: %w", errors.Join(errs...))
+}
+
+func (r *resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) {
 	cc := r.pool.Get(r.name)
 	if cc == nil {
 		return nil, fmt.Errorf("no connection available in pool for target %q", r.name)
 	}
 
-	client, err := connectClient(r.opts.ReqTimeout, cc, reflectionpb.ServerReflection_ServerReflectionInfo_FullMethodName)
+	client, err := connectClient(r.opts.ReqTimeout, cc, method)
 	if err != nil {
 		return nil, err
 	}
