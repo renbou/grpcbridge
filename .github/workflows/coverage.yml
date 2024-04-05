@@ -1,0 +1,26 @@
+name: Coverage
+run-name: Coverage for ${{ github.ref_name }} by @${{ github.actor }}
+on:
+  pull_request:
+    branches:
+      - "main"
+  push:
+    branches:
+      - "main"
+jobs:
+  cover:
+    runs-on: ubuntu-latest
+    name: Test & upload coverage
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run tests and collect coverage
+        run: make coverpkg
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
