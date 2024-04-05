@@ -14,3 +14,10 @@ services:
     ports:
       - "127.0.0.1:50052:50052"
     restart: unless-stopped
+  rstestapi:
+    build: ./rstestapi
+    environment:
+      LISTEN_ADDR: "0.0.0.0:50053"
+    ports:
+      - "127.0.0.1:50053:50053"
+    restart: unless-stopped

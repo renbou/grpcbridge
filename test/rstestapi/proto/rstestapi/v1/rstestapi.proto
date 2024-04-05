@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package rstestapi.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// ClockService is a basic example service just used to test how grpcbridge works with the Rust tonic gRPC implementation.
+// It should probably be enhanced later once it's known what kind of features need additional testing,
+// while keeping the gotestapi/pytestapi implementations simple as interactive demos.
+service ClockService {
+  rpc GetTime(google.protobuf.Empty) returns (google.protobuf.Timestamp);
+}
