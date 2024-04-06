@@ -1,6 +1,7 @@
 package reflection
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -28,16 +29,18 @@ func mustClient(t *testing.T, conn grpcadapter.ClientConn) *client {
 	return client
 }
 
-type fakeReflectionServer struct {
+type staticReflectionServer struct {
 	reflectionpb.UnimplementedServerReflectionServer
 	resp *reflectionpb.ServerReflectionResponse
 }
 
-func (s *fakeReflectionServer) ServerReflectionInfo(stream reflectionpb.ServerReflection_ServerReflectionInfoServer) error {
+func (s *staticReflectionServer) ServerReflectionInfo(stream reflectionpb.ServerReflection_ServerReflectionInfoServer) error {
 	for {
 		_, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			return nil
+		} else if err != nil {
+			return err
 		}
 
 		if err := stream.Send(s.resp); err != nil {
@@ -132,7 +135,7 @@ func Test_client_ErrorResponses(t *testing.T) {
 	t.Parallel()
 
 	errorStatus := status.New(codes.Internal, "unexpected internal error")
-	reflectionServer := &fakeReflectionServer{resp: &reflectionpb.ServerReflectionResponse{
+	reflectionServer := &staticReflectionServer{resp: &reflectionpb.ServerReflectionResponse{
 		MessageResponse: &reflectionpb.ServerReflectionResponse_ErrorResponse{ErrorResponse: &reflectionpb.ErrorResponse{
 			ErrorCode:    int32(errorStatus.Code()),
 			ErrorMessage: errorStatus.Message(),
@@ -209,7 +212,7 @@ func Test_client_UnexpectedResponses(t *testing.T) {
 	t.Parallel()
 
 	// AllExtensionNumbersResponse shouldn't be returned to any of the current client requests.
-	reflectionServer := &fakeReflectionServer{resp: &reflectionpb.ServerReflectionResponse{
+	reflectionServer := &staticReflectionServer{resp: &reflectionpb.ServerReflectionResponse{
 		MessageResponse: &reflectionpb.ServerReflectionResponse_AllExtensionNumbersResponse{},
 	}}
 
@@ -281,30 +284,37 @@ func test_client_UnexpectedResponses_fileDescriptorsByFilenames(t *testing.T, co
 func Test_client_SendErrors(t *testing.T) {
 	t.Parallel()
 
-	server, _, conn := bridgetest.MustGRPCServer(t)
+	server, pool, _ := bridgetest.MustGRPCServer(t)
 	defer server.Stop()
+
+	// Return a client with a connection which is immediately closed.
+	closedConnClient := func(t *testing.T, name string) *client {
+		controller := pool.Build(context.Background(), name, bridgetest.TestTarget)
+		client := mustClient(t, pool.Get(name))
+		controller.Close()
+		return client
+	}
 
 	t.Run("cases", func(t *testing.T) {
 		t.Run("listServiceNames", func(t *testing.T) {
-			test_client_listServiceNames_SendErrors(t, conn)
+			test_client_listServiceNames_SendErrors(t, closedConnClient)
 		})
 
 		t.Run("fileDescriptorsBySymbols", func(t *testing.T) {
-			test_client_fileDescriptorsBySymbols_SendErrors(t, conn)
+			test_client_fileDescriptorsBySymbols_SendErrors(t, closedConnClient)
 		})
 
 		t.Run("fileDescriptorsByFilenames", func(t *testing.T) {
-			test_client_fileDescriptorsByFilenames_SendErrors(t, conn)
+			test_client_fileDescriptorsByFilenames_SendErrors(t, closedConnClient)
 		})
 	})
 }
 
-func test_client_listServiceNames_SendErrors(t *testing.T, conn grpcadapter.ClientConn) {
+func test_client_listServiceNames_SendErrors(t *testing.T, clientFunc func(t *testing.T, name string) *client) {
 	t.Parallel()
 
 	// Arrange
-	client := mustClient(t, conn)
-	client.stream.Close() // manually close the whole stream
+	client := clientFunc(t, "listServiceNames")
 
 	// Act
 	_, err := client.listServiceNames()
@@ -315,12 +325,11 @@ func test_client_listServiceNames_SendErrors(t *testing.T, conn grpcadapter.Clie
 	}
 }
 
-func test_client_fileDescriptorsBySymbols_SendErrors(t *testing.T, conn grpcadapter.ClientConn) {
+func test_client_fileDescriptorsBySymbols_SendErrors(t *testing.T, clientFunc func(t *testing.T, name string) *client) {
 	t.Parallel()
 
 	// Arrange
-	client := mustClient(t, conn)
-	client.stream.Close() // manually close the whole stream
+	client := clientFunc(t, "fileDescriptorsBySymbols")
 
 	// Act
 	_, err := client.fileDescriptorsBySymbols([]protoreflect.FullName{"package.Service"})
@@ -331,12 +340,11 @@ func test_client_fileDescriptorsBySymbols_SendErrors(t *testing.T, conn grpcadap
 	}
 }
 
-func test_client_fileDescriptorsByFilenames_SendErrors(t *testing.T, conn grpcadapter.ClientConn) {
+func test_client_fileDescriptorsByFilenames_SendErrors(t *testing.T, clientFunc func(t *testing.T, name string) *client) {
 	t.Parallel()
 
 	// Arrange
-	client := mustClient(t, conn)
-	client.stream.Close() // manually close the whole stream
+	client := clientFunc(t, "fileDescriptorsByFilenames")
 
 	// Act
 	_, err := client.fileDescriptorsByFilenames([]string{"file.proto"})

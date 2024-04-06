@@ -123,7 +123,7 @@ func NewResolverBuilder(pool ConnPool, opts ResolverOpts) *ResolverBuilder {
 
 // Build initializes a new [Resolver] for the specified target and launches its poller goroutine.
 // The new resolver will use the pool specified in [NewResolverBuilder] to retrieve connections to the target.
-func (rb *ResolverBuilder) Build(target string, watcher Watcher) (*Resolver, error) {
+func (rb *ResolverBuilder) Build(target string, watcher Watcher) *Resolver {
 	r := &Resolver{
 		opts:           rb.opts,
 		target:         target,
@@ -137,7 +137,7 @@ func (rb *ResolverBuilder) Build(target string, watcher Watcher) (*Resolver, err
 	r.newResolveNow() // set a valid notifyResolveNow before returning the resolver
 	go r.watch()
 
-	return r, nil
+	return r
 }
 
 // Resolver is the gRPC reflection-based description resolver, initialized using a [ResolverBuilder].
@@ -171,22 +171,13 @@ func (r *Resolver) ResolveNow() {
 }
 
 // Close closes the resolver, releasing any associated resources (i.e. the poller goroutine).
+// It waits for the poller goroutine to acknowledge the closure, to avoid potential resource leakage.
+// Calling Close() more than once will panic.
 func (r *Resolver) Close() {
-	close(r.done)
+	r.done <- struct{}{}
 }
 
 func (r *Resolver) watch() {
-	// time.Ticker isn't used because we need the pollInterval to be *in between* polls,
-	// not to actually resolve once every pollInterval, which might
-	// lead to resolve() being called straight after the last one returning.
-	afterFunc := func() <-chan time.Time {
-		if r.opts.PollManually {
-			return nil
-		}
-
-		return time.After(r.opts.PollInterval)
-	}
-
 	for {
 		state, err := r.resolve()
 		if err == nil && state != nil { // state is nil when it hasn't changed
@@ -197,13 +188,25 @@ func (r *Resolver) watch() {
 		}
 
 		select {
-		case <-afterFunc():
+		case <-r.afterInterval():
 		case <-r.resolveNow:
 			r.newResolveNow()
 		case <-r.done:
+			close(r.done)
 			return
 		}
 	}
+}
+
+func (r *Resolver) afterInterval() <-chan time.Time {
+	// time.Ticker isn't used because we need the pollInterval to be *in between* polls,
+	// not to actually resolve once every pollInterval, which might
+	// lead to resolve() being called straight after the last one returning.
+	if r.opts.PollManually {
+		return nil
+	}
+
+	return time.After(r.opts.PollInterval)
 }
 
 func (r *Resolver) newResolveNow() {
@@ -356,7 +359,7 @@ func (r *Resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 	var missingList []string
 
 	for i := 0; i < r.opts.RecursionLimit && len(missing) > 0; i++ {
-		missingList = slices.Grow(missingList, len(missing))
+		missingList = slices.Grow(missingList, len(missing))[:0]
 		for dep := range missing {
 			missingList = append(missingList, dep)
 		}
@@ -364,6 +367,15 @@ func (r *Resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 		depDescriptors, depBundles, err := r.fileDescriptorsByFilenames(c, missingList)
 		if err != nil {
 			return err
+		}
+
+		// Append only the missing dependencies, since the server can return elements which are unique in the context of a single request,
+		// but not in the context of a whole stream.
+		for i, fd := range depDescriptors.File {
+			if _, ok := present[fd.GetName()]; !ok {
+				descriptors.File = append(descriptors.File, fd)
+				*bundles = append(*bundles, depBundles[i])
+			}
 		}
 
 		updatePresentDescriptorSet(depDescriptors, present)
@@ -374,8 +386,6 @@ func (r *Resolver) retrieveDependencies(c *client, descriptors *descriptorpb.Fil
 		}
 
 		growMissingDescriptorSet(depDescriptors, present, missing)
-		descriptors.File = append(descriptors.File, depDescriptors.File...)
-		*bundles = append(*bundles, depBundles...)
 	}
 
 	if len(missing) > 0 {

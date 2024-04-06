@@ -86,11 +86,7 @@ func mainImpl() error {
 		lw := &loggingWatcher{logger: logger}
 		rw := router.Watcher(cfg.Name)
 
-		_, err = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, rw}})
-		if err != nil {
-			logger.Error("Failed to build resolver", "error", err)
-			return err
-		}
+		_ = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, rw}})
 	}
 
 	lis, err := net.Listen("tcp", ":11111")
