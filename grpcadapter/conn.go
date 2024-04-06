@@ -41,12 +41,12 @@ func AdaptedDial(dial func() (*grpc.ClientConn, error)) *AdaptedClientConn {
 		cc.mu.Lock()
 		defer cc.mu.Unlock()
 
+		cc.conn = conn
+		cc.err = err
+
 		// closed before dial() has completed, need to close the connection now
 		if cc.closed {
 			cc.applyClose()
-		} else {
-			cc.conn = conn
-			cc.err = err
 		}
 
 		cc.dialed = true
