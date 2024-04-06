@@ -12,20 +12,35 @@ import (
 var emptyMessageInstance Message = ConcreteMessage[emptypb.Empty]()
 
 type Target struct {
+	Name     string
 	Services []Service
 }
 
 type Service struct {
+	// Target this service was discovered for, exposed to be available after routing.
+	Target  *Target
 	Name    protoreflect.FullName
 	Methods []Method
 }
 
 type Method struct {
+	// Service this method is part of, exposed to be available after routing.
+	Service         *Service
 	RPCName         string
 	Input           Message
 	Output          Message
 	ClientStreaming bool
 	ServerStreaming bool
+	Bindings        []Binding
+}
+
+type Binding struct {
+	// Method this binding is for, since without it the binding doesn't have much meaning.
+	Method           *Method
+	HTTPMethod       string
+	Pattern          string
+	RequestBodyPath  string
+	ResponseBodyPath string
 }
 
 // Proto properly unmarshals any message into an empty one, keeping all the fields as protoimpl.UnknownFields.

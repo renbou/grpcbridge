@@ -14,20 +14,20 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+type GRPCRoute struct {
+	Method *bridgedesc.Method
+}
+
 type ServiceRouterOpts struct {
 	Logger bridgelog.Logger
 }
 
 func (o ServiceRouterOpts) withDefaults() ServiceRouterOpts {
 	if o.Logger == nil {
-		o.Logger = defaultServiceRouterOpts.Logger
+		o.Logger = bridgelog.Discard()
 	}
 
 	return o
-}
-
-var defaultServiceRouterOpts = ServiceRouterOpts{
-	Logger: bridgelog.Discard(),
 }
 
 type ServiceRouter struct {
@@ -46,50 +46,49 @@ type ServiceRouter struct {
 	svcRoutes map[string][]protoreflect.FullName
 }
 
-func NewServiceRouter(pool *grpcadapter.DialedPool, opts ServiceRouterOpts) *ServiceRouter {
+func NewServiceRouter(pool ConnPool, opts ServiceRouterOpts) *ServiceRouter {
 	opts = opts.withDefaults()
 
 	return &ServiceRouter{
 		pool:      pool,
-		logger:    opts.Logger.WithComponent("grpcbridge.route"),
+		logger:    opts.Logger.WithComponent("grpcbridge.routing"),
 		routes:    make(map[protoreflect.FullName]string),
 		svcRoutes: make(map[string][]protoreflect.FullName),
 	}
 }
 
-func (sr *ServiceRouter) RouteGRPC(ctx context.Context) (grpcadapter.ClientConn, *bridgedesc.Method, error) {
+func (sr *ServiceRouter) RouteGRPC(ctx context.Context) (grpcadapter.ClientConn, GRPCRoute, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
 	rpcName, ok := grpc.Method(ctx)
 	if !ok {
 		sr.logger.Error("no method name in stream context, unable to route request")
-		return nil, nil, status.Errorf(codes.Internal, "grpcbridge: no method name in stream context, unable to route request")
+		return nil, GRPCRoute{}, status.Errorf(codes.Internal, "grpcbridge: no method name in stream context, unable to route request")
 	}
 
 	svc, method, ok := parseRPCName(rpcName)
 	if !ok {
-		return nil, nil, status.Errorf(codes.Unimplemented, "no route for path of invalid gRPC format")
+		return nil, GRPCRoute{}, status.Errorf(codes.Unimplemented, "no route for path of invalid gRPC format")
 	}
 
 	route, ok := sr.routes[svc]
 	if !ok {
-		return nil, nil, status.Errorf(codes.Unimplemented, "no route for gRPC service %q", svc)
+		return nil, GRPCRoute{}, status.Errorf(codes.Unimplemented, "no route for gRPC service %q", svc)
 	}
 
-	conn := sr.pool.Get(route)
-	if conn == nil {
-		return nil, nil, status.Errorf(codes.Unavailable, "no connection to available in pool for target %q", route)
+	conn, ok := sr.pool.Get(route)
+	if !ok {
+		return nil, GRPCRoute{}, status.Errorf(codes.Unavailable, "no connection to available for target %q", route)
 	}
 
-	return conn, bridgedesc.DummyMethod(protoreflect.FullName(svc), protoreflect.Name(method)), nil
+	return conn, GRPCRoute{
+		Method: bridgedesc.DummyMethod(protoreflect.FullName(svc), protoreflect.Name(method)),
+	}, nil
 }
 
 func (sr *ServiceRouter) Watcher(target string) *ServiceRouterWatcher {
-	return &ServiceRouterWatcher{
-		sr:     sr,
-		target: target,
-	}
+	return &ServiceRouterWatcher{sr: sr, target: target}
 }
 
 func (sr *ServiceRouter) updateRoutes(target string, state *bridgedesc.Target) {
@@ -158,9 +157,6 @@ func (srw *ServiceRouterWatcher) UpdateDesc(desc *bridgedesc.Target) {
 }
 
 func (srw *ServiceRouterWatcher) ReportError(error) {
-	// error ignored because it can't be meaningfully used with this type of routing,
-	// where the router can't tell which requests the error should be applied to,
-	// as all of the routing is done based on information from the discovery resolver.
 	// TODO(renbou): introduce a circuit breaker mechanism when errors are reported multiple times?
 }
 

@@ -76,17 +76,19 @@ func mainImpl() error {
 		PollInterval: time.Second * 5,
 	})
 
-	router := routing.NewServiceRouter(connPool, routing.ServiceRouterOpts{Logger: logger})
+	grpcRouter := routing.NewServiceRouter(connPool, routing.ServiceRouterOpts{Logger: logger})
+	httpRouter := routing.NewPatternRouter(connPool, routing.PatternRouterOpts{Logger: logger})
 
-	grpcProxy := grpcbridge.NewGRPCProxy(router, grpcbridge.GPRCProxyOpts{Logger: logger})
+	grpcProxy := grpcbridge.NewGRPCProxy(grpcRouter, grpcbridge.GPRCProxyOpts{Logger: logger})
 
 	for _, cfg := range cfg.Services {
 		_ = connPool.Build(context.Background(), cfg.Name, cfg.Target)
 
 		lw := &loggingWatcher{logger: logger}
-		rw := router.Watcher(cfg.Name)
+		gw := grpcRouter.Watcher(cfg.Name)
+		hw := httpRouter.Watcher(cfg.Name)
 
-		_ = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, rw}})
+		_ = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, gw, hw}})
 	}
 
 	lis, err := net.Listen("tcp", ":11111")

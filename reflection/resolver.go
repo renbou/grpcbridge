@@ -37,7 +37,7 @@ var reflectionMethods = []string{
 
 // ConnPool is implemented by [*grpcadapter.DialedPool] and is used by ResolverBuilder to retrieve connections.
 type ConnPool interface {
-	Get(target string) grpcadapter.ClientConn
+	Get(target string) (grpcadapter.ClientConn, bool)
 }
 
 // Watcher defines the interface of a watcher which is notified by the resolver of updates.
@@ -244,8 +244,8 @@ func (r *Resolver) resolve() (*bridgedesc.Target, error) {
 }
 
 func (r *Resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) {
-	cc := r.pool.Get(r.target)
-	if cc == nil {
+	cc, ok := r.pool.Get(r.target)
+	if !ok {
 		return nil, fmt.Errorf("no connection available in pool for target %q", r.target)
 	}
 

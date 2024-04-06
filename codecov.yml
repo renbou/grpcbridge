@@ -1,3 +1,4 @@
 ignore:
   - "internal/bridgetest"
+  - "internal/httprule"
   - "test"

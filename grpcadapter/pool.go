@@ -46,16 +46,16 @@ func (p *DialedPool) Build(ctx context.Context, targetName, dialTarget string) *
 	return conn
 }
 
-func (p *DialedPool) Get(target string) ClientConn {
+func (p *DialedPool) Get(target string) (ClientConn, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	controller, ok := p.conns[target]
 	if !ok {
-		return nil
+		return nil, false
 	}
 
-	return controller.conn
+	return controller.conn, true
 }
 
 func (p *DialedPool) remove(name string) {

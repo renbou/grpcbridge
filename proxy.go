@@ -7,13 +7,14 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"github.com/renbou/grpcbridge/routing"
 	"google.golang.org/grpc"
 )
 
 var _ grpc.StreamHandler = (*GRPCProxy)(nil).StreamHandler
 
 type GRPCRouter interface {
-	RouteGRPC(context.Context) (grpcadapter.ClientConn, *bridgedesc.Method, error)
+	RouteGRPC(context.Context) (grpcadapter.ClientConn, routing.GRPCRoute, error)
 }
 
 type GPRCProxyOpts struct {
@@ -51,15 +52,15 @@ func (s *GRPCProxy) AsOption() grpc.ServerOption {
 }
 
 func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
-	conn, desc, err := s.router.RouteGRPC(incoming.Context())
+	conn, route, err := s.router.RouteGRPC(incoming.Context())
 	if err != nil {
 		return err
 	}
 
-	logger := s.logger.With("method", desc.RPCName)
+	logger := s.logger.With("method", route.Method.RPCName)
 
 	// TODO(renbou): timeouts for stream initiation and Recv/Sends
-	outgoing, err := conn.BiDiStream(incoming.Context(), desc.RPCName)
+	outgoing, err := conn.BiDiStream(incoming.Context(), route.Method.RPCName)
 	if err != nil {
 		return err
 	}
@@ -71,11 +72,11 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 	o2iErrCh := make(chan proxyingError, 1)
 
 	go func() {
-		i2oErrCh <- s.forwardIncomingToOutgoing(logger, incoming, outgoing, desc.Input)
+		i2oErrCh <- s.forwardIncomingToOutgoing(logger, incoming, outgoing, route.Method.Input)
 	}()
 
 	go func() {
-		o2iErrCh <- s.forwardOutgoingToIncoming(logger, outgoing, incoming, desc.Output)
+		o2iErrCh <- s.forwardOutgoingToIncoming(logger, outgoing, incoming, route.Method.Output)
 	}()
 
 	// Handle proxying errors and return them when needed,

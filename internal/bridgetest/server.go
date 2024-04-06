@@ -53,5 +53,7 @@ func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Se
 	controller := pool.Build(ctx, TestTarget, "bufconn")
 	tb.Cleanup(controller.Close) // intentionally added after listener.Close cleanup for the connection to be closed before the listener
 
-	return server, pool, pool.Get(TestTarget)
+	conn, _ := pool.Get(TestTarget)
+
+	return server, pool, conn
 }
