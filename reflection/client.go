@@ -143,8 +143,8 @@ func (c *client) execFileDescriptorRequests(requests []*reflectionpb.ServerRefle
 	go func() {
 		defer wg.Done()
 		recvd, err := c.fileDescriptorsReceiver(ctx, semaphore, requests, name)
+		res = recvd // before channel send, which is a synchronizing operation
 		recvErr <- err
-		res = recvd
 	}()
 
 	// If one of the goroutines fails prematurely, immediately return and cancel the context to stop the other one.
