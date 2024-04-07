@@ -17,15 +17,11 @@ type Target struct {
 }
 
 type Service struct {
-	// Target this service was discovered for, exposed to be available after routing.
-	Target  *Target
 	Name    protoreflect.FullName
 	Methods []Method
 }
 
 type Method struct {
-	// Service this method is part of, exposed to be available after routing.
-	Service         *Service
 	RPCName         string
 	Input           Message
 	Output          Message
@@ -35,8 +31,6 @@ type Method struct {
 }
 
 type Binding struct {
-	// Method this binding is for, since without it the binding doesn't have much meaning.
-	Method           *Method
 	HTTPMethod       string
 	Pattern          string
 	RequestBodyPath  string

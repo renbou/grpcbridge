@@ -48,7 +48,7 @@ type Watcher interface {
 	ReportError(error)
 }
 
-// ResolverOpts define all the optional settings which can be set for resolvers.
+// ResolverOpts define all the optional settings which can be set for [Resolver].
 type ResolverOpts struct {
 	// Logs are discarded by default.
 	Logger bridgelog.Logger
@@ -290,6 +290,7 @@ func (r *Resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) 
 	}
 
 	// Save the hash only at the end, when we can be sure that the new set is fully valid.
+	parsed.Desc.Name = r.target
 	r.lastProtoHash = newProtoHash
 	r.lastServicesHash = newServicesHash
 	r.logger.Debug("resolver successfully updated file descriptors", "proto_hash", newProtoHash, "services_hash", newServicesHash)

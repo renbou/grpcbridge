@@ -69,6 +69,7 @@ func Test_client_UnimplementedErrors(t *testing.T) {
 	server, _, conn := bridgetest.MustGRPCServer(t)
 	defer server.Stop()
 
+	// Run in non-parallel subtest so that server.Stop() runs AFTER all the subtests.
 	t.Run("cases", func(t *testing.T) {
 		t.Run("listServiceNames", func(t *testing.T) {
 			test_client_UnimplementedErrors_listServiceNames(t, conn)
@@ -95,7 +96,7 @@ func test_client_UnimplementedErrors_listServiceNames(t *testing.T, conn grpcada
 
 	// Assert
 	if cmpErr := bridgetest.StatusCodeIs(err, codes.Unimplemented); cmpErr != nil {
-		t.Fatalf("listServiceNames() returned error = %q with unexpected code: %s", err, cmpErr)
+		t.Errorf("listServiceNames() returned error = %q with unexpected code: %s", err, cmpErr)
 	}
 }
 
@@ -110,7 +111,7 @@ func test_client_UnimplementedErrors_fileDescriptorsBySymbols(t *testing.T, conn
 
 	// Assert
 	if cmpErr := bridgetest.StatusCodeIs(err, codes.Unimplemented); cmpErr != nil {
-		t.Fatalf("fileDescriptorsBySymbols() returned error = %q with unexpected code: %s", err, cmpErr)
+		t.Errorf("fileDescriptorsBySymbols() returned error = %q with unexpected code: %s", err, cmpErr)
 	}
 }
 
@@ -125,7 +126,7 @@ func test_client_UnimplementedErrors_fileDescriptorsByFilenames(t *testing.T, co
 
 	// Assert
 	if cmpErr := bridgetest.StatusCodeIs(err, codes.Unimplemented); cmpErr != nil {
-		t.Fatalf("fileDescriptorsByFilenames() returned error = %q with unexpected code: %s", err, cmpErr)
+		t.Errorf("fileDescriptorsByFilenames() returned error = %q with unexpected code: %s", err, cmpErr)
 	}
 }
 
@@ -147,6 +148,7 @@ func Test_client_ErrorResponses(t *testing.T) {
 	})
 	defer server.Stop()
 
+	// Run in non-parallel subtest so that server.Stop() runs AFTER all the subtests.
 	t.Run("cases", func(t *testing.T) {
 		t.Run("listServiceNames", func(t *testing.T) {
 			test_client_ErrorResponses_listServiceNames(t, conn, errorStatus)
@@ -173,7 +175,7 @@ func test_client_ErrorResponses_listServiceNames(t *testing.T, conn grpcadapter.
 
 	// Assert
 	if cmpErr := bridgetest.StatusIs(err, errorStatus); cmpErr != nil {
-		t.Fatalf("listServiceNames() returned error = %q with unexpected status: %s", err, cmpErr)
+		t.Errorf("listServiceNames() returned error = %q with unexpected status: %s", err, cmpErr)
 	}
 }
 
@@ -188,7 +190,7 @@ func test_client_ErrorResponses_fileDescriptorsBySymbols(t *testing.T, conn grpc
 
 	// Assert
 	if cmpErr := bridgetest.StatusIs(err, errorStatus); cmpErr != nil {
-		t.Fatalf("fileDescriptorsBySymbols() returned error = %q with unexpected status: %s", err, cmpErr)
+		t.Errorf("fileDescriptorsBySymbols() returned error = %q with unexpected status: %s", err, cmpErr)
 	}
 }
 
@@ -203,7 +205,7 @@ func test_client_ErrorResponses_fileDescriptorsByFilenames(t *testing.T, conn gr
 
 	// Assert
 	if cmpErr := bridgetest.StatusIs(err, errorStatus); cmpErr != nil {
-		t.Fatalf("fileDescriptorsByFilenames() returned error = %q with unexpected status: %s", err, cmpErr)
+		t.Errorf("fileDescriptorsByFilenames() returned error = %q with unexpected status: %s", err, cmpErr)
 	}
 }
 
@@ -221,6 +223,7 @@ func Test_client_UnexpectedResponses(t *testing.T) {
 	})
 	defer server.Stop()
 
+	// Run in non-parallel subtest so that server.Stop() runs AFTER all the subtests.
 	t.Run("cases", func(t *testing.T) {
 		t.Run("listServiceNames", func(t *testing.T) {
 			test_client_UnexpectedResponses_listServiceNames(t, conn)
@@ -247,7 +250,7 @@ func test_client_UnexpectedResponses_listServiceNames(t *testing.T, conn grpcada
 
 	// Assert
 	if cmpErr := isFailedResponseCheck(err); cmpErr != nil {
-		t.Fatalf("listServiceNames() should've failed due to invalid response type: %s", cmpErr)
+		t.Errorf("listServiceNames() should've failed due to invalid response type: %s", cmpErr)
 	}
 }
 
@@ -262,7 +265,7 @@ func test_client_UnexpectedResponses_fileDescriptorsBySymbols(t *testing.T, conn
 
 	// Assert
 	if cmpErr := isFailedResponseCheck(err); cmpErr != nil {
-		t.Fatalf("fileDescriptorsBySymbols() should've failed due to invalid response type: %s", cmpErr)
+		t.Errorf("fileDescriptorsBySymbols() should've failed due to invalid response type: %s", cmpErr)
 	}
 }
 
@@ -277,7 +280,7 @@ func test_client_UnexpectedResponses_fileDescriptorsByFilenames(t *testing.T, co
 
 	// Assert
 	if cmpErr := isFailedResponseCheck(err); cmpErr != nil {
-		t.Fatalf("fileDescriptorsByFilenames() should've failed due to invalid response type: %s", cmpErr)
+		t.Errorf("fileDescriptorsByFilenames() should've failed due to invalid response type: %s", cmpErr)
 	}
 }
 
@@ -296,6 +299,7 @@ func Test_client_SendErrors(t *testing.T) {
 		return client
 	}
 
+	// Run in non-parallel subtest so that server.Stop() runs AFTER all the subtests.
 	t.Run("cases", func(t *testing.T) {
 		t.Run("listServiceNames", func(t *testing.T) {
 			test_client_listServiceNames_SendErrors(t, closedConnClient)
@@ -322,7 +326,7 @@ func test_client_listServiceNames_SendErrors(t *testing.T, clientFunc func(t *te
 
 	// Assert
 	if !errors.Is(err, io.EOF) {
-		t.Fatalf("listServiceNames() returned error = %q, want io.EOF due to closed connection", err)
+		t.Errorf("listServiceNames() returned error = %q, want io.EOF due to closed connection", err)
 	}
 }
 
@@ -337,7 +341,7 @@ func test_client_fileDescriptorsBySymbols_SendErrors(t *testing.T, clientFunc fu
 
 	// Assert
 	if !errors.Is(err, io.EOF) {
-		t.Fatalf("fileDescriptorsBySymbols() returned error = %q, want io.EOF due to closed connection", err)
+		t.Errorf("fileDescriptorsBySymbols() returned error = %q, want io.EOF due to closed connection", err)
 	}
 }
 
@@ -352,6 +356,6 @@ func test_client_fileDescriptorsByFilenames_SendErrors(t *testing.T, clientFunc 
 
 	// Assert
 	if !errors.Is(err, io.EOF) {
-		t.Fatalf("fileDescriptorsByFilenames() returned error = %q, want io.EOF due to closed connection", err)
+		t.Errorf("fileDescriptorsByFilenames() returned error = %q, want io.EOF due to closed connection", err)
 	}
 }

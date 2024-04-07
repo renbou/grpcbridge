@@ -13,18 +13,27 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
-	"github.com/renbou/grpcbridge/internal/countmap"
 	"github.com/renbou/grpcbridge/internal/httprule"
+	"github.com/renbou/grpcbridge/internal/syncset"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// HTTPRoute contains the matched route information for a single specific HTTP request, returned by the RouteHTTP method of the routers.
 type HTTPRoute struct {
-	Binding    *bridgedesc.Binding
+	Target  *bridgedesc.Target
+	Service *bridgedesc.Service
+	Method  *bridgedesc.Method
+	Binding *bridgedesc.Binding
+	// Matched, URL-decoded path parameters defined by the binding pattern.
+	// See https://github.com/googleapis/googleapis/blob/e0677a395947c2f3f3411d7202a6868a7b069a41/google/api/http.proto#L295
+	// for information about how exactly different kinds of parameters are decoded.
 	PathParams map[string]string
 }
 
+// PatternRouterOpts define all the optional settings which can be set for [PatternRouter].
 type PatternRouterOpts struct {
+	// Logs are discarded by default.
 	Logger bridgelog.Logger
 }
 
@@ -36,24 +45,42 @@ func (o PatternRouterOpts) withDefaults() PatternRouterOpts {
 	return o
 }
 
+// PatternRouter is a router meant for routing HTTP requests with non-gRPC URLs/contents.
+// It uses pattern-based route matching like the one used in [gRPC-Gateway], but additionally supports dynamic routing updates
+// via [PatternRouterWatcher], meant to be used with a description resolver such as the one in the grpcbridge/reflection package.
+//
+// Unlike gRPC-Gateway it doesn't support POST->GET fallbacks and X-HTTP-Method-Override,
+// since such features can easily become a source of security issues for an unsuspecting developer.
+// By the same logic, request paths aren't cleaned, i.e. multiple slashes, ./.. elements aren't removed.
+//
+// [gRPC-Gateway]: https://github.com/grpc-ecosystem/grpc-gateway
 type PatternRouter struct {
-	pool           ConnPool
-	logger         bridgelog.Logger
-	routes         *mutablePatternRoutingTable
-	watcherCounter *countmap.CountMap[string, int]
+	pool       ConnPool
+	logger     bridgelog.Logger
+	routes     *mutablePatternRoutingTable
+	watcherSet *syncset.SyncSet[string]
 }
 
+// NewPatternRouter initializes a new [PatternRouter] with the specified connection pool and options.
+//
+// The connection pool will be used to perform a simple retrieval of the connection to a target by its name.
+// for more complex connection routing this router's [PatternRouter.RouteHTTP] can be wrapped to return a
+// different connection based on the matched method and HTTP request parameters.
 func NewPatternRouter(pool ConnPool, opts PatternRouterOpts) *PatternRouter {
 	opts = opts.withDefaults()
 
 	return &PatternRouter{
-		pool:           pool,
-		logger:         opts.Logger.WithComponent("grpcbridge.routing"),
-		routes:         newMutablePatternRoutingTable(),
-		watcherCounter: countmap.New[string, int](),
+		pool:       pool,
+		logger:     opts.Logger.WithComponent("grpcbridge.routing"),
+		routes:     newMutablePatternRoutingTable(),
+		watcherSet: syncset.New[string](),
 	}
 }
 
+// RouteHTTP routes the HTTP request based on its URL path and method
+// using the target descriptions received via updates through [PatternRouterWatcher.UpdateDesc].
+// Errors returned by RouteHTTP are gRPC status.Status errors with the code set accordingly.
+// Currently, the NotFound, InvalidArgument, and Unavailable codes are returned.
 func (pr *PatternRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTTPRoute, error) {
 	// Try to follow the same steps as in https://github.com/grpc-ecosystem/grpc-gateway/blob/main/runtime/mux.go#L328 (ServeMux.ServeHTTP).
 	// Specifically, use RawPath for pattern matching, since it will be properly decoded by the pattern itself.
@@ -67,10 +94,10 @@ func (pr *PatternRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTT
 	matchComponents := make([]string, len(pathComponents))
 
 	var routeErr error
-	var matchedTarget string
+	var matched bool
 	var matchedRoute HTTPRoute
 
-	pr.routes.iterate(r.Method, func(target string, route *patternRoute) bool {
+	pr.routes.iterate(r.Method, func(target *bridgedesc.Target, route *patternRoute) bool {
 		var verb string
 		patternVerb := route.pattern.Verb()
 
@@ -105,62 +132,97 @@ func (pr *PatternRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTT
 			return true
 		}
 
+		// Avoid returning empty maps when not needed.
+		if len(params) == 0 {
+			params = nil
+		}
+
 		// Found match
-		matchedTarget = target
-		matchedRoute = HTTPRoute{Binding: route.binding, PathParams: params}
+		matched = true
+		matchedRoute = HTTPRoute{
+			Target:     target,
+			Service:    route.service,
+			Method:     route.method,
+			Binding:    route.binding,
+			PathParams: params,
+		}
 		return false
 	})
 
 	if routeErr != nil {
 		return nil, HTTPRoute{}, routeErr
+	} else if !matched {
+		return nil, HTTPRoute{}, status.Error(codes.NotFound, http.StatusText(http.StatusNotFound))
 	}
 
-	conn, ok := pr.pool.Get(matchedTarget)
+	conn, ok := pr.pool.Get(matchedRoute.Target.Name)
 	if !ok {
-		return nil, HTTPRoute{}, status.Errorf(codes.Unavailable, "no connection to available for target %q", matchedTarget)
+		return nil, HTTPRoute{}, status.Errorf(codes.Unavailable, "no connection available to matched target %q", matchedRoute.Target.Name)
 	}
 
 	return conn, matchedRoute, nil
 }
 
-func (pr *PatternRouter) Watcher(target string) *PatternRouterWatcher {
-	pr.watcherCounter.Inc(target)
-	return &PatternRouterWatcher{pr: pr, target: target}
+// Watch starts watching the specified target for description changes.
+// It returns a [*PatternRouterWatcher] through which new updates for this target can be applied.
+//
+// It is an error to try Watch()ing the same target multiple times on a single PatternRouter instance,
+// the previous [PatternRouterWatcher] must be explicitly closed before launching a new one.
+// Instead of trying to synchronize such procedures, however, it's better to have a properly defined lifecycle
+// for each possible target, with clear logic about when it gets added or removed to/from all the components of a bridge.
+func (pr *PatternRouter) Watch(target string) (*PatternRouterWatcher, error) {
+	if pr.watcherSet.Add(target) {
+		return &PatternRouterWatcher{pr: pr, target: target, logger: pr.logger.With("target", target)}, nil
+	}
+
+	return nil, ErrAlreadyWatching
 }
 
+// PatternRouterWatcher is a description update watcher created for a specific target in the context of a [PatternRouter] instance.
+// New PatternRouterWatchers are created through [PatternRouter.Watch].
 type PatternRouterWatcher struct {
 	pr     *PatternRouter
+	logger bridgelog.Logger
 	target string
 	closed atomic.Bool
 }
 
+// UpdateDesc updates the description of the target this watcher is watching.
+// After the watcher is Close()d, UpdateDesc becomes a no-op, to avoid writing meaningless routes to the router.
+// Note that desc.Name must match the target this watcher was created for, otherwise the update will be ignored.
+//
+// UpdateDesc returns only when the routing state has been completely updated on the router,
+// which should be used to synchronize the target description update polling/watching logic.
 func (prw *PatternRouterWatcher) UpdateDesc(desc *bridgedesc.Target) {
 	if prw.closed.Load() {
 		return
 	}
 
-	prw.pr.updateRoutes(prw.target, desc)
+	if desc.Name != prw.target {
+		// use PatternRouter logger without the "target" field
+		prw.pr.logger.Error("pattern route watcher got update for different target, will ignore", "watcher_target", prw.target, "update_target", desc.Name)
+		return
+	}
+
+	routes := buildPatternRoutes(desc, prw.logger)
+	prw.pr.routes.addTarget(desc, routes)
 }
 
+// ReportError is currently a no-op, present simply to implement the Watcher interface
+// of the grpcbridge description resolvers, such as the one in [github.com/renbou/grpcbridge/reflection].
 func (prw *PatternRouterWatcher) ReportError(error) {}
 
+// Close closes the watcher, preventing further updates from being applied to the router through it.
+// It is an error to call Close() multiple times on the same watcher, and doing so will result in a panic.
 func (prw *PatternRouterWatcher) Close() {
 	if !prw.closed.CompareAndSwap(false, true) {
 		panic("grpcbridge: PatternRouterWatcher.Close() called multiple times")
 	}
 
-	if prw.pr.watcherCounter.Dec(prw.target) == 0 {
-		prw.pr.cleanRoutes(prw.target)
-	}
-}
-
-func (pr *PatternRouter) updateRoutes(target string, desc *bridgedesc.Target) {
-	routes := buildPatternRoutes(desc, pr.logger.With("target", target))
-	pr.routes.addTarget(target, routes)
-}
-
-func (pr *PatternRouter) cleanRoutes(target string) {
-	pr.routes.removeTarget(target)
+	// Fully remove the target's routes, only then mark the watcher as closed.
+	prw.pr.routes.removeTarget(prw.target)
+	prw.closed.Store(true)
+	prw.pr.watcherSet.Remove(prw.target)
 }
 
 func buildPatternRoutes(desc *bridgedesc.Target, logger bridgelog.Logger) map[string][]patternRoute {
@@ -173,7 +235,7 @@ func buildPatternRoutes(desc *bridgedesc.Target, logger bridgelog.Logger) map[st
 			method := &methods[methodIdx]
 
 			if len(method.Bindings) < 1 {
-				if routeErr := builder.addDefault(method); routeErr != nil {
+				if routeErr := builder.addDefault(svc, method); routeErr != nil {
 					logger.Error("failed to add default HTTP binding for gRPC method with no defined bindings",
 						"service", svc.Name, "method", method.RPCName,
 						"error", routeErr,
@@ -186,7 +248,7 @@ func buildPatternRoutes(desc *bridgedesc.Target, logger bridgelog.Logger) map[st
 
 			for bindingIdx := range method.Bindings {
 				binding := &method.Bindings[bindingIdx]
-				if routeErr := builder.addBinding(method, binding); routeErr != nil {
+				if routeErr := builder.addBinding(svc, method, binding); routeErr != nil {
 					logger.Error("failed to add HTTP binding for gRPC method",
 						"service", svc.Name, "method", method.RPCName,
 						"binding.method", binding.HTTPMethod, "binding.pattern", binding.Pattern,
@@ -206,27 +268,26 @@ func buildPatternRoutes(desc *bridgedesc.Target, logger bridgelog.Logger) map[st
 }
 
 type patternRoute struct {
+	service *bridgedesc.Service
+	method  *bridgedesc.Method
 	binding *bridgedesc.Binding
 	pattern runtime.Pattern
 }
 
-func parsePatternRoute(method *bridgedesc.Method, binding *bridgedesc.Binding) (patternRoute, error) {
-	compiler, err := httprule.Parse(binding.Pattern)
+func buildPattern(route string) (runtime.Pattern, error) {
+	compiler, err := httprule.Parse(route)
 	if err != nil {
-		return patternRoute{}, fmt.Errorf("parsing method %s binding pattern for %s: %w", method.RPCName, binding.HTTPMethod, err)
+		return runtime.Pattern{}, fmt.Errorf("parsing route: %w", err)
 	}
 
 	tp := compiler.Compile()
 
 	pattern, routeErr := runtime.NewPattern(tp.Version, tp.OpCodes, tp.Pool, tp.Verb)
 	if routeErr != nil {
-		return patternRoute{}, fmt.Errorf("creating method %s binding pattern matcher for %s: %w", method.RPCName, binding.HTTPMethod, routeErr)
+		return runtime.Pattern{}, fmt.Errorf("creating route pattern matcher: %w", routeErr)
 	}
 
-	return patternRoute{
-		binding: binding,
-		pattern: pattern,
-	}, nil
+	return pattern, nil
 }
 
 // patternRouteBuilder is a helper structure used for building the routing table for a single target.
@@ -240,27 +301,32 @@ func newPatternRouteBuilder() patternRouteBuilder {
 	}
 }
 
-func (rb *patternRouteBuilder) addBinding(method *bridgedesc.Method, binding *bridgedesc.Binding) error {
-	pr, err := parsePatternRoute(method, binding)
+func (rb *patternRouteBuilder) addBinding(s *bridgedesc.Service, m *bridgedesc.Method, b *bridgedesc.Binding) error {
+	pr, err := buildPattern(b.Pattern)
 	if err != nil {
-		return err
+		return fmt.Errorf("building pattern for %s: %w", b.HTTPMethod, err)
 	}
 
-	rb.routes[binding.HTTPMethod] = append(rb.routes[binding.HTTPMethod], pr)
+	rb.routes[b.HTTPMethod] = append(rb.routes[b.HTTPMethod], patternRoute{
+		service: s,
+		method:  m,
+		binding: b,
+		pattern: pr,
+	})
 	return nil
 }
 
-func (rb *patternRouteBuilder) addDefault(method *bridgedesc.Method) error {
+func (rb *patternRouteBuilder) addDefault(s *bridgedesc.Service, m *bridgedesc.Method) error {
 	// Default gRPC form, as specified in https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#requests.
-	return rb.addBinding(method, &bridgedesc.Binding{
+	return rb.addBinding(s, m, &bridgedesc.Binding{
 		HTTPMethod: http.MethodPost,
-		Pattern:    method.RPCName,
+		Pattern:    m.RPCName,
 	})
 }
 
 // targetPatternRoutes define the routes for a single target+method combination.
 type targetPatternRoutes struct {
-	target string
+	target *bridgedesc.Target
 	routes []patternRoute
 }
 
@@ -291,14 +357,14 @@ func newMutablePatternRoutingTable() *mutablePatternRoutingTable {
 }
 
 // addTargets adds or updates the routes of a target and updates the static pointer.
-func (mt *mutablePatternRoutingTable) addTarget(target string, routes map[string][]patternRoute) {
+func (mt *mutablePatternRoutingTable) addTarget(target *bridgedesc.Target, routes map[string][]patternRoute) {
 	mt.mu.Lock()
 	defer mt.mu.Unlock()
 
 	newMethodLinks := make([]methodPatternRoutes, 0, len(routes))
 
 	// Update existing elements without recreating them.
-	for _, link := range mt.targetLinks[target] {
+	for _, link := range mt.targetLinks[target.Name] {
 		patternRoutes, ok := routes[link.method]
 		if !ok {
 			// delete existing link, no more routes for this method
@@ -320,7 +386,7 @@ func (mt *mutablePatternRoutingTable) addTarget(target string, routes map[string
 		newMethodLinks = append(newMethodLinks, methodPatternRoutes{method: method, link: link})
 	}
 
-	mt.targetLinks[target] = newMethodLinks
+	mt.targetLinks[target.Name] = newMethodLinks
 
 	mt.static.Store(mt.commit())
 }
@@ -366,7 +432,7 @@ func (mt *mutablePatternRoutingTable) commit() *staticPatternRoutingTable {
 	return &staticPatternRoutingTable{routes: routes}
 }
 
-func (mt *mutablePatternRoutingTable) iterate(method string, fn func(target string, route *patternRoute) bool) {
+func (mt *mutablePatternRoutingTable) iterate(method string, fn func(target *bridgedesc.Target, route *patternRoute) bool) {
 	mt.static.Load().iterate(method, fn)
 }
 
@@ -376,7 +442,7 @@ type staticPatternRoutingTable struct {
 	routes map[string]*list.List // http method -> linked list of targetPatternRoutes
 }
 
-func (st *staticPatternRoutingTable) iterate(method string, fn func(target string, route *patternRoute) bool) {
+func (st *staticPatternRoutingTable) iterate(method string, fn func(target *bridgedesc.Target, route *patternRoute) bool) {
 	list, ok := st.routes[method]
 	if !ok {
 		return

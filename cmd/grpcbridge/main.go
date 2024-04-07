@@ -86,7 +86,11 @@ func mainImpl() error {
 
 		lw := &loggingWatcher{logger: logger}
 		gw := grpcRouter.Watcher(cfg.Name)
-		hw := httpRouter.Watcher(cfg.Name)
+		hw, err := httpRouter.Watch(cfg.Name)
+		if err != nil {
+			logger.Error("failed to create watcher for http router", "error", err)
+			return err
+		}
 
 		_ = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, gw, hw}})
 	}
