@@ -2,11 +2,11 @@ version: v1
 managed:
   enabled: true
   go_package_prefix:
-    default: gotestapi/gen
+    default: gotestapi/gen/proto
 plugins:
   - plugin: go
-    out: gen
+    out: gen/proto
     opt: paths=source_relative
   - plugin: go-grpc
-    out: gen
+    out: gen/proto
     opt: paths=source_relative

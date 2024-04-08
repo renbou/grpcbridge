@@ -10,4 +10,4 @@ BIN_DIR ?= $(ROOT_DIR)/bin
 .PHONY: gen
 gen: export PATH := $(BIN_DIR):$(PATH)
 gen: .gen-deps
-	buf generate
+	buf generate proto

@@ -2,10 +2,24 @@ syntax = "proto3";
 
 package grpcbridge.internal.bridgetest.testpb;
 
+import "google/api/annotations.proto";
 import "messages.proto";
 
 option go_package = "github.com/renbou/grpcbridge/internal/bridgetest/testpb";
 
 service TestService {
   rpc UnaryUnbound(Scalars) returns (Scalars);
+
+  rpc UnaryCombined(Combined) returns (Combined) {
+    option (google.api.http) = {
+      post: "/service/combined/{scalars.bool_value}/{scalars.string_value}"
+      body: "non_scalars"
+      response_body: "non_scalars"
+    };
+  }
+}
+
+message Combined {
+  Scalars scalars = 1;
+  NonScalars non_scalars = 2;
 }

@@ -2,28 +2,54 @@ syntax = "proto3";
 
 package gotestapi.v1;
 
+import "google/api/annotations.proto";
 // The fake/unused v1alpha proto is imported to validate that grpcbridge properly
 // handles imports containing services not actually running on the server.
-import "proto/gotestapi/v1alpha/gotestapi.proto";
+import "gotestapi/v1alpha/gotestapi.proto";
 
 // VeggieShopService is a simple example API used for demonstrating basic unary & streaming capabilities of grpcbridge.
 service VeggieShopService {
   // CreateShop is a unary RPC used to create a new example shop.
-  rpc CreateShop(CreateShopRequest) returns (CreateShopResponse);
+  rpc CreateShop(CreateShopRequest) returns (CreateShopResponse) {
+    option (google.api.http) = {
+      post: "/api/veggieshop/v1/shops"
+      body: "*"
+      additional_bindings {
+        post: "/gotestapi.v1.VeggieShopService/CreateShop"
+        body: "*"
+      }
+    };
+  }
 
   // GetShopStats is a unary RPC used to get some purchase stats about a created shop.
   // If no shop with the specified ID exists, a NotFound status code is returned.
-  rpc GetShopStats(GetStatsRequest) returns (GetStatsResponse);
+  rpc GetShopStats(GetStatsRequest) returns (GetStatsResponse) {
+    option (google.api.http) = {
+      get: "/api/veggieshop/v1/shop/{shop_id}/stats"
+      additional_bindings {post: "/api/veggieshop/v1/shop:stats"}
+    };
+  }
 
   // BuildPurchase is a client-streaming RPC used by a client to dynamically build a purchase.
   // It dynamically updates the shop's state and can be monitored using MonitorShop.
   // If no shop with the specified ID exists, a NotFound status code is returned.
   // If the client sends requests in the stream with different shop IDs, a FailedPrecondition status code is returned.
-  rpc BuildPurchase(stream BuildPurchaseRequest) returns (BuildPurchaseResponse);
+  rpc BuildPurchase(stream BuildPurchaseRequest) returns (BuildPurchaseResponse) {
+    option (google.api.http) = {
+      post: "/api/veggieshop/v1/shop/{shop_id}/purchase"
+      body: "*"
+      response_body: "purchased_veggies"
+    };
+  }
 
   // MonitorShop is a server-streaming RPC used to monitor a shop's state (planned & created purchases).
   // If no shop with the specified ID exists, a NotFound status code is returned.
-  rpc MonitorShop(MonitorShopRequest) returns (stream MonitorShopResponse);
+  rpc MonitorShop(MonitorShopRequest) returns (stream MonitorShopResponse) {
+    option (google.api.http) = {
+      post: "/api/veggieshop/v1/shop:monitor"
+      body: "*";
+    };
+  }
 }
 
 // QuantifiedVeggie is needed because proto3 doesn't support maps with enum as key.

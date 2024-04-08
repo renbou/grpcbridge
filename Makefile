@@ -30,8 +30,8 @@ showcover: coverpkg
 .PHONY: zzz.protodeps
 zzz.protodeps: export GOBIN := $(BIN_DIR)
 zzz.protodeps:
-	which protoc-gen-go || go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.33.0
-	which protoc-gen-go-grpc || go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.33.0
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
 
 # Generate protos for tests
 .PHONY: proto

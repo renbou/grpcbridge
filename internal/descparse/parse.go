@@ -2,8 +2,11 @@ package descparse
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
+	"google.golang.org/genproto/googleapis/api/annotations"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
@@ -74,6 +77,49 @@ func parseMethodDescriptor(desc *bridgedesc.Method, sd protoreflect.ServiceDescr
 	desc.Output = bridgedesc.DynamicMessage(md.Output())
 	desc.ClientStreaming = md.IsStreamingClient()
 	desc.ServerStreaming = md.IsStreamingServer()
+
+	if !proto.HasExtension(md.Options(), annotations.E_Http) {
+		return
+	}
+
+	ext := proto.GetExtension(md.Options(), annotations.E_Http)
+	httpRule, ok := ext.(*annotations.HttpRule)
+	if !ok {
+		return
+	}
+
+	desc.Bindings = make([]bridgedesc.Binding, 1+len(httpRule.AdditionalBindings))
+	parseBinding(&desc.Bindings[0], httpRule)
+
+	for i, binding := range httpRule.AdditionalBindings {
+		parseBinding(&desc.Bindings[i+1], binding)
+	}
+}
+
+func parseBinding(desc *bridgedesc.Binding, rule *annotations.HttpRule) {
+	switch pattern := rule.GetPattern().(type) {
+	case *annotations.HttpRule_Get:
+		desc.HTTPMethod = http.MethodGet
+		desc.Pattern = pattern.Get
+	case *annotations.HttpRule_Put:
+		desc.HTTPMethod = http.MethodPut
+		desc.Pattern = pattern.Put
+	case *annotations.HttpRule_Post:
+		desc.HTTPMethod = http.MethodPost
+		desc.Pattern = pattern.Post
+	case *annotations.HttpRule_Delete:
+		desc.HTTPMethod = http.MethodDelete
+		desc.Pattern = pattern.Delete
+	case *annotations.HttpRule_Patch:
+		desc.HTTPMethod = http.MethodPatch
+		desc.Pattern = pattern.Patch
+	case *annotations.HttpRule_Custom:
+		desc.HTTPMethod = pattern.Custom.GetKind()
+		desc.Pattern = pattern.Custom.GetPath()
+	}
+
+	desc.RequestBodyPath = rule.GetBody()
+	desc.ResponseBodyPath = rule.GetResponseBody()
 }
 
 type protoList[T any] interface {

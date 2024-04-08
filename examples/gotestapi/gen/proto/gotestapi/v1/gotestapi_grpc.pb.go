@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.3.0
 // - protoc             (unknown)
-// source: proto/gotestapi/v1/gotestapi.proto
+// source: gotestapi/v1/gotestapi.proto
 
 package gotestapiv1
 
@@ -296,5 +296,5 @@ var VeggieShopService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "proto/gotestapi/v1/gotestapi.proto",
+	Metadata: "gotestapi/v1/gotestapi.proto",
 }
