@@ -69,7 +69,7 @@ func parseServiceDescriptors(desc *bridgedesc.Service, sd protoreflect.ServiceDe
 }
 
 func parseMethodDescriptor(desc *bridgedesc.Method, sd protoreflect.ServiceDescriptor, md protoreflect.MethodDescriptor) {
-	desc.RPCName = bridgedesc.FormatRPCName(sd.FullName(), md.Name())
+	desc.RPCName = bridgedesc.CanonicalRPCName(sd.FullName(), md.Name())
 	desc.Input = bridgedesc.DynamicMessage(md.Input())
 	desc.Output = bridgedesc.DynamicMessage(md.Output())
 	desc.ClientStreaming = md.IsStreamingClient()

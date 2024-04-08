@@ -19,18 +19,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// HTTPRoute contains the matched route information for a single specific HTTP request, returned by the RouteHTTP method of the routers.
-type HTTPRoute struct {
-	Target  *bridgedesc.Target
-	Service *bridgedesc.Service
-	Method  *bridgedesc.Method
-	Binding *bridgedesc.Binding
-	// Matched, URL-decoded path parameters defined by the binding pattern.
-	// See https://github.com/googleapis/googleapis/blob/e0677a395947c2f3f3411d7202a6868a7b069a41/google/api/http.proto#L295
-	// for information about how exactly different kinds of parameters are decoded.
-	PathParams map[string]string
-}
-
 // PatternRouterOpts define all the optional settings which can be set for [PatternRouter].
 type PatternRouterOpts struct {
 	// Logs are discarded by default.
@@ -47,7 +35,7 @@ func (o PatternRouterOpts) withDefaults() PatternRouterOpts {
 
 // PatternRouter is a router meant for routing HTTP requests with non-gRPC URLs/contents.
 // It uses pattern-based route matching like the one used in [gRPC-Gateway], but additionally supports dynamic routing updates
-// via [PatternRouterWatcher], meant to be used with a description resolver such as the one in the grpcbridge/reflection package.
+// via [PatternRouterWatcher], meant to be used with a description resolver such as the one in the [github.com/renbou/grpcbridge/reflection] package.
 //
 // Unlike gRPC-Gateway it doesn't support POST->GET fallbacks and X-HTTP-Method-Override,
 // since such features can easily become a source of security issues for an unsuspecting developer.
@@ -79,8 +67,12 @@ func NewPatternRouter(pool ConnPool, opts PatternRouterOpts) *PatternRouter {
 
 // RouteHTTP routes the HTTP request based on its URL path and method
 // using the target descriptions received via updates through [PatternRouterWatcher.UpdateDesc].
+//
 // Errors returned by RouteHTTP are gRPC status.Status errors with the code set accordingly.
 // Currently, the NotFound, InvalidArgument, and Unavailable codes are returned.
+// Additionally, it can return an error implementing interface { HTTPStatus() int } to set a custom status code, but it doesn't currently do so.
+//
+// Performance-wise it is notable that updates to the routing information don't block RouteHTTP, happening fully in the background.
 func (pr *PatternRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTTPRoute, error) {
 	// Try to follow the same steps as in https://github.com/grpc-ecosystem/grpc-gateway/blob/main/runtime/mux.go#L328 (ServeMux.ServeHTTP).
 	// Specifically, use RawPath for pattern matching, since it will be properly decoded by the pattern itself.
@@ -157,7 +149,7 @@ func (pr *PatternRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTT
 
 	conn, ok := pr.pool.Get(matchedRoute.Target.Name)
 	if !ok {
-		return nil, HTTPRoute{}, status.Errorf(codes.Unavailable, "no connection available to matched target %q", matchedRoute.Target.Name)
+		return nil, HTTPRoute{}, status.Errorf(codes.Unavailable, "no connection available to target %q", matchedRoute.Target.Name)
 	}
 
 	return conn, matchedRoute, nil
@@ -188,8 +180,11 @@ type PatternRouterWatcher struct {
 }
 
 // UpdateDesc updates the description of the target this watcher is watching.
-// After the watcher is Close()d, UpdateDesc becomes a no-op, to avoid writing meaningless routes to the router.
+// After the watcher is Close()d, UpdateDesc becomes a no-op, to avoid writing meaningless updates to the router.
 // Note that desc.Name must match the target this watcher was created for, otherwise the update will be ignored.
+//
+// Updates to the routing information are made without any locking,
+// instead replacing the currently present info with the updated one using an atomic pointer.
 //
 // UpdateDesc returns only when the routing state has been completely updated on the router,
 // which should be used to synchronize the target description update polling/watching logic.
@@ -200,7 +195,7 @@ func (prw *PatternRouterWatcher) UpdateDesc(desc *bridgedesc.Target) {
 
 	if desc.Name != prw.target {
 		// use PatternRouter logger without the "target" field
-		prw.pr.logger.Error("pattern route watcher got update for different target, will ignore", "watcher_target", prw.target, "update_target", desc.Name)
+		prw.pr.logger.Error("PatternRouterWatcher got update for different target, will ignore", "watcher_target", prw.target, "update_target", desc.Name)
 		return
 	}
 
@@ -221,7 +216,6 @@ func (prw *PatternRouterWatcher) Close() {
 
 	// Fully remove the target's routes, only then mark the watcher as closed.
 	prw.pr.routes.removeTarget(prw.target)
-	prw.closed.Store(true)
 	prw.pr.watcherSet.Remove(prw.target)
 }
 
@@ -450,8 +444,8 @@ func (st *staticPatternRoutingTable) iterate(method string, fn func(target *brid
 
 	for e := list.Front(); e != nil; e = e.Next() {
 		pr := e.Value.(targetPatternRoutes)
-		for _, route := range pr.routes {
-			if !fn(pr.target, &route) {
+		for i := range pr.routes {
+			if !fn(pr.target, &pr.routes[i]) {
 				return
 			}
 		}

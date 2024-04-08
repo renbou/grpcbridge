@@ -30,17 +30,10 @@ type Method struct {
 	Bindings        []Binding
 }
 
-type Binding struct {
-	HTTPMethod       string
-	Pattern          string
-	RequestBodyPath  string
-	ResponseBodyPath string
-}
-
 // Proto properly unmarshals any message into an empty one, keeping all the fields as protoimpl.UnknownFields.
 func DummyMethod(svcName protoreflect.FullName, methodName protoreflect.Name) *Method {
 	return &Method{
-		RPCName:         FormatRPCName(svcName, methodName),
+		RPCName:         CanonicalRPCName(svcName, methodName),
 		Input:           emptyMessageInstance,
 		Output:          emptyMessageInstance,
 		ClientStreaming: true,
@@ -48,8 +41,27 @@ func DummyMethod(svcName protoreflect.FullName, methodName protoreflect.Name) *M
 	}
 }
 
-func FormatRPCName(svcName protoreflect.FullName, methodName protoreflect.Name) string {
+// CanonicalRPCName returns the canonical gRPC method name, as specified in the gRPC [PROTOCOL-HTTP2] spec.
+//
+// [PROTOCOL-HTTP2]: https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#requests
+func CanonicalRPCName(svcName protoreflect.FullName, methodName protoreflect.Name) string {
 	return fmt.Sprintf("/%s/%s", svcName, methodName)
+}
+
+type Binding struct {
+	HTTPMethod       string
+	Pattern          string
+	RequestBodyPath  string
+	ResponseBodyPath string
+}
+
+func DefaultBinding(method *Method) *Binding {
+	return &Binding{
+		HTTPMethod:       "POST",
+		Pattern:          method.RPCName,
+		RequestBodyPath:  "*",
+		ResponseBodyPath: "", // "When omitted, the entire response message will be used as the HTTP response body.", from http.proto
+	}
 }
 
 type Message interface {

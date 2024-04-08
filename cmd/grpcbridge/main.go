@@ -85,7 +85,12 @@ func mainImpl() error {
 		_ = connPool.Build(context.Background(), cfg.Name, cfg.Target)
 
 		lw := &loggingWatcher{logger: logger}
-		gw := grpcRouter.Watcher(cfg.Name)
+		gw, err := grpcRouter.Watch(cfg.Name)
+		if err != nil {
+			logger.Error("failed to create watcher for grpc router", "error", err)
+			return err
+		}
+
 		hw, err := httpRouter.Watch(cfg.Name)
 		if err != nil {
 			logger.Error("failed to create watcher for http router", "error", err)

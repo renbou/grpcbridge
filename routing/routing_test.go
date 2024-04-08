@@ -1,11 +1,14 @@
 package routing
 
 import (
+	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/grpcadapter"
 	"go.uber.org/goleak"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // nilConnPool implements ConnPool without returning any connection for tests.
@@ -87,6 +90,53 @@ var testTarget = bridgedesc.Target{
 			},
 		},
 	},
+}
+
+type templateTargetInfo struct {
+	template int
+	name     string
+}
+
+func buildTemplateTargets(n int, seed int64, templates [][]bridgedesc.Target) []templateTargetInfo {
+	rnd := rand.New(rand.NewSource(seed))
+	targets := make([]templateTargetInfo, n)
+
+	for i := range targets {
+		targets[i] = templateTargetInfo{template: rnd.Intn(len(templates)), name: fmt.Sprintf("target_%d", i)}
+	}
+
+	return targets
+}
+
+// buildDescTemplate builds a target description from a template,
+// used in router tests for generating multiple different targets with unique names based on a few templates.
+func buildDescTemplate(template *bridgedesc.Target, dest *bridgedesc.Target, targetName string, targetIdx int) {
+	dest.Name = targetName
+	dest.Services = make([]bridgedesc.Service, len(template.Services))
+
+	for svcIdx := range template.Services {
+		templateSvc := &template.Services[svcIdx]
+		destSvc := &dest.Services[svcIdx]
+
+		destSvc.Name = protoreflect.FullName(fmt.Sprintf(string(templateSvc.Name), targetIdx))
+		destSvc.Methods = make([]bridgedesc.Method, len(templateSvc.Methods))
+
+		for methodIdx := range templateSvc.Methods {
+			templateMethod := &templateSvc.Methods[methodIdx]
+			destMethod := &destSvc.Methods[methodIdx]
+
+			destMethod.RPCName = fmt.Sprintf(templateMethod.RPCName, targetIdx)
+			destMethod.Bindings = make([]bridgedesc.Binding, len(templateMethod.Bindings))
+
+			for bindingIdx := range templateMethod.Bindings {
+				templateBinding := &templateMethod.Bindings[bindingIdx]
+				destBinding := &destMethod.Bindings[bindingIdx]
+
+				destBinding.HTTPMethod = templateBinding.HTTPMethod
+				destBinding.Pattern = fmt.Sprintf(templateBinding.Pattern, targetIdx)
+			}
+		}
+	}
 }
 
 func TestMain(m *testing.M) {
