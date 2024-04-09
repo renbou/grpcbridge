@@ -690,11 +690,10 @@ func Test_JSONEncoder_Encode(t *testing.T) {
 	marshaler := JSONMarshaler{}
 	encoder := marshaler.NewEncoder(testpb.TestServiceTypesResolver, buf)
 
-	const want = `true` + "\n" + `"Str"`
+	const want = `true` + "\n" + `"Str"` + "\n"
 
 	// Act
 	_ = encoder.Encode((&testpb.Scalars{BoolValue: true}).ProtoReflect(), scalarFields.ByName("bool_value"))
-	buf.WriteByte('\n')
 	_ = encoder.Encode((&testpb.Scalars{StringValue: "Str"}).ProtoReflect(), scalarFields.ByName("string_value"))
 
 	// Assert

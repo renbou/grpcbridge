@@ -312,10 +312,7 @@ func (rb *patternRouteBuilder) addBinding(s *bridgedesc.Service, m *bridgedesc.M
 
 func (rb *patternRouteBuilder) addDefault(s *bridgedesc.Service, m *bridgedesc.Method) error {
 	// Default gRPC form, as specified in https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#requests.
-	return rb.addBinding(s, m, &bridgedesc.Binding{
-		HTTPMethod: http.MethodPost,
-		Pattern:    m.RPCName,
-	})
+	return rb.addBinding(s, m, bridgedesc.DefaultBinding(m))
 }
 
 // targetPatternRoutes define the routes for a single target+method combination.

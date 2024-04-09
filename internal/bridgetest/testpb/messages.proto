@@ -44,6 +44,8 @@ message NonScalars {
       Digits digits = 1;
       GrandChild grand_child = 2;
     }
+
+    Scalars extra_scalars = 3;
   }
 
   map<string, string> str2str_map = 1;
@@ -53,6 +55,7 @@ message NonScalars {
   repeated Child msg_list = 5;
   Digits root_digits = 6;
   google.protobuf.Duration duration = 7;
+  Child child = 8;
 }
 
 message WellKnown {

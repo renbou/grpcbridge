@@ -18,29 +18,44 @@ import (
 
 var nullJson = []byte("null")
 
+const (
+	contentTypeJSON = "application/json"
+	jsonDelimiter   = '\n'
+)
+
+var (
+	_ Marshaler       = (*JSONMarshaler)(nil)
+	_ StreamMarshaler = (*JSONMarshaler)(nil)
+)
+
 // JSONMarshaler implements marshaling and unmarshaling of arbitrary protobuf message fields with custom type resolving,
 // meant to be used for transcoding request and response messages from different targets.
-// Encoding is implemented as specified in the Proto3 [JSON Mapping].
+// Encoding is implemented as specified in the [Proto3 JSON Mapping].
 //
-// [JSON Mapping]: https://protobuf.dev/programming-guides/proto3/#json
+// [Proto3 JSON Mapping]: https://protobuf.dev/programming-guides/proto3/#json
 type JSONMarshaler struct {
 	protojson.MarshalOptions
 	protojson.UnmarshalOptions
 }
 
-// JSONEncoder is a streaming alternative to [JSONMarshaler.Marshal].
+// jsonEncoder is a streaming alternative to [JSONMarshaler.Marshal].
 // It can be created using [JSONMarshaler.NewEncoder], and all marshaled messages will be written to the assigned writer.
-type JSONEncoder struct {
+type jsonEncoder struct {
 	marshaler *JSONMarshaler
 	types     bridgedesc.TypeResolver
 	writer    io.Writer
 }
 
-// JSONDecoder is a streaming alternative to [JSONMarshaler.Unmarshal].
+// jsonDecoder is a streaming alternative to [JSONMarshaler.Unmarshal].
 // It can be created using [JSONMarshaler.NewDecoder], and all messages will be unmarshaled from the assigned reader.
-type JSONDecoder struct {
+type jsonDecoder struct {
 	protojson.UnmarshalOptions
 	dec *json.Decoder
+}
+
+// ContentTypes returns a single-element slice containing "application/json".
+func (m *JSONMarshaler) ContentTypes() []string {
+	return []string{contentTypeJSON}
 }
 
 // Marshal marshals the given protobuf message or field to JSON.
@@ -89,25 +104,25 @@ func (m *JSONMarshaler) Unmarshal(types bridgedesc.TypeResolver, b []byte, msg p
 	return m.NewDecoder(types, bytes.NewReader(b)).Decode(msg, fd)
 }
 
-// NewEncoder initializes a new [JSONEncoder] which will use the specified type information for marshaling messages to the given writer.
-func (m *JSONMarshaler) NewEncoder(types bridgedesc.TypeResolver, w io.Writer) *JSONEncoder {
-	return &JSONEncoder{marshaler: m, types: types, writer: w}
+// NewEncoder initializes a new streaming JSON encoder which will use the specified type information for marshaling messages to the given writer.
+func (m *JSONMarshaler) NewEncoder(types bridgedesc.TypeResolver, w io.Writer) Encoder {
+	return &jsonEncoder{marshaler: m, types: types, writer: w}
 }
 
 // Encode encodes a single message or field value to the encoder's writer.
-func (e *JSONEncoder) Encode(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
+func (e *jsonEncoder) Encode(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
 	b, err := e.marshaler.Marshal(e.types, msg, fd)
 	if err != nil {
 		return err
 	}
 
-	_, err = e.writer.Write(b)
+	_, err = e.writer.Write(append(b, jsonDelimiter))
 	return err
 }
 
-// NewDecoder initializes a new [JSONDecoder] which will use the specified type information for unmarshaling messages from the given writer.
-func (m *JSONMarshaler) NewDecoder(types bridgedesc.TypeResolver, r io.Reader) *JSONDecoder {
-	dec := &JSONDecoder{
+// NewDecoder initializes a new streaming JSON decoder which will use the specified type information for unmarshaling messages from the given writer.
+func (m *JSONMarshaler) NewDecoder(types bridgedesc.TypeResolver, r io.Reader) Decoder {
+	dec := &jsonDecoder{
 		// opts are copied
 		UnmarshalOptions: m.UnmarshalOptions,
 		dec:              json.NewDecoder(r),
@@ -121,7 +136,7 @@ func (m *JSONMarshaler) NewDecoder(types bridgedesc.TypeResolver, r io.Reader) *
 }
 
 // Decoder decodes a single message or field value from the decoder's reader.
-func (d *JSONDecoder) Decode(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
+func (d *jsonDecoder) Decode(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
 	// Try unmarshaling the whole message at once.
 	if fd == nil {
 		return d.unmarshalMessage(msg)
@@ -165,7 +180,7 @@ func (m *JSONMarshaler) marshalSingular(opts *protojson.MarshalOptions, value pr
 }
 
 func (m *JSONMarshaler) marshalList(opts *protojson.MarshalOptions, protolist protoreflect.List, fd protoreflect.FieldDescriptor) ([]byte, error) {
-	if !protolist.IsValid() && !opts.EmitUnpopulated {
+	if !protolist.IsValid() && !opts.EmitUnpopulated && !opts.EmitDefaultValues {
 		return slices.Clone(nullJson), nil
 	}
 
@@ -184,7 +199,7 @@ func (m *JSONMarshaler) marshalList(opts *protojson.MarshalOptions, protolist pr
 }
 
 func (m *JSONMarshaler) marshalMap(opts *protojson.MarshalOptions, protomap protoreflect.Map, fd protoreflect.FieldDescriptor) ([]byte, error) {
-	if !protomap.IsValid() && !opts.EmitUnpopulated {
+	if !protomap.IsValid() && !opts.EmitUnpopulated && !opts.EmitDefaultValues {
 		return slices.Clone(nullJson), nil
 	}
 
@@ -214,7 +229,7 @@ func (m *JSONMarshaler) marshalJSON(value any, opts *protojson.MarshalOptions) (
 	return json.MarshalIndent(value, "", opts.Indent)
 }
 
-func (d *JSONDecoder) unmarshalMessage(msg protoreflect.Message) error {
+func (d *jsonDecoder) unmarshalMessage(msg protoreflect.Message) error {
 	var b json.RawMessage
 	if err := d.dec.Decode(&b); err != nil {
 		return err
@@ -223,7 +238,7 @@ func (d *JSONDecoder) unmarshalMessage(msg protoreflect.Message) error {
 	return d.UnmarshalOptions.Unmarshal(b, msg.Interface())
 }
 
-func (d *JSONDecoder) unmarshalList(protolist protoreflect.List, fd protoreflect.FieldDescriptor) error {
+func (d *jsonDecoder) unmarshalList(protolist protoreflect.List, fd protoreflect.FieldDescriptor) error {
 	var marshaled []json.RawMessage
 
 	if err := d.dec.Decode(&marshaled); err != nil {
@@ -256,7 +271,7 @@ func (d *JSONDecoder) unmarshalList(protolist protoreflect.List, fd protoreflect
 	return nil
 }
 
-func (d *JSONDecoder) unmarshalMap(protomap protoreflect.Map, fd protoreflect.FieldDescriptor) error {
+func (d *jsonDecoder) unmarshalMap(protomap protoreflect.Map, fd protoreflect.FieldDescriptor) error {
 	var marshaled map[string]json.RawMessage
 
 	if err := d.dec.Decode(&marshaled); err != nil {
@@ -301,7 +316,7 @@ func (d *JSONDecoder) unmarshalMap(protomap protoreflect.Map, fd protoreflect.Fi
 	return nil
 }
 
-func (d *JSONDecoder) unmarshalSingular(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
+func (d *jsonDecoder) unmarshalSingular(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
 	// fd is guaranteed to be non-nil here, since otherwise value would be a message
 	switch fd.Kind() {
 	case protoreflect.MessageKind, protoreflect.GroupKind:
@@ -317,7 +332,7 @@ func (d *JSONDecoder) unmarshalSingular(msg protoreflect.Message, fd protoreflec
 	return nil
 }
 
-func (d *JSONDecoder) unmarshalScalar(fd protoreflect.FieldDescriptor) (protoreflect.Value, error) {
+func (d *jsonDecoder) unmarshalScalar(fd protoreflect.FieldDescriptor) (protoreflect.Value, error) {
 	// All the cases specified in https://pkg.go.dev/google.golang.org/protobuf@v1.33.0/reflect/protoreflect#Value
 	switch fd.Kind() {
 	case protoreflect.BoolKind:

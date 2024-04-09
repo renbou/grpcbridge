@@ -1,4 +1,5 @@
 ignore:
   - "internal/bridgetest"
   - "internal/httprule"
+  - "internal/gwquery"
   - "test"
