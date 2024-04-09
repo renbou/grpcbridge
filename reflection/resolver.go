@@ -20,7 +20,6 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
-	"github.com/renbou/grpcbridge/internal/descparse"
 	"google.golang.org/grpc/codes"
 	reflectionpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
 	reflectionalphapb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
@@ -282,20 +281,19 @@ func (r *Resolver) resolveWithMethod(method string) (*bridgedesc.Target, error) 
 		return nil, nil
 	}
 
-	parsed, err := descparse.ParseFileDescriptors(serviceNames, descriptors)
+	parsed, err := parseFileDescriptors(r.target, serviceNames, descriptors)
 	if err != nil {
 		return nil, err
-	} else if !r.opts.OnlyServices && len(parsed.MissingServices) > 0 {
-		r.logger.Warn("resolver received file descriptors with missing gRPC service definitions", "missing_services", parsed.MissingServices)
+	} else if !r.opts.OnlyServices && len(parsed.missingServices) > 0 {
+		r.logger.Warn("resolver received file descriptors with missing gRPC service definitions", "missing_services", parsed.missingServices)
 	}
 
 	// Save the hash only at the end, when we can be sure that the new set is fully valid.
-	parsed.Desc.Name = r.target
 	r.lastProtoHash = newProtoHash
 	r.lastServicesHash = newServicesHash
 	r.logger.Debug("resolver successfully updated file descriptors", "proto_hash", newProtoHash, "services_hash", newServicesHash)
 
-	return parsed.Desc, nil
+	return parsed.desc, nil
 }
 
 // listServiceNames returns a deduplicated and validates list of service names.

@@ -4,15 +4,42 @@ import (
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var emptyMessageInstance Message = ConcreteMessage[emptypb.Empty]()
 
+// FileRegistry contains basic methods needed to discover proto files by their name and defined symbols.
+// It is used for implementing gRPC reflection and by [ParseTarget] for parsing [Target] definitions.
+type FileRegistry interface {
+	protodesc.Resolver
+}
+
+// TypeRegistry contains the methods needed to resolve proto types for implementing gRPC reflection
+// or performing operations such as marshaling/unmarshaling protos to JSON.
+// It is implemented by *protoregistry.Types and *dynamicpb.Types.
+type TypeRegistry interface {
+	protoregistry.MessageTypeResolver
+	protoregistry.ExtensionTypeResolver
+}
+
 type Target struct {
-	Name     string
+	// A target's name is arbitrary and only makes sense in the context of grpcbridge.
+	Name string
+	// FileRegistry is the registry of proto files defined for this target, using which the description was parsed.
+	FileRegistry FileRegistry
+	// TypeRegistry is the registry of proto type descriptors defined for this target, it should be derived from the FileRegistry.
+	TypeRegistry TypeRegistry
+	// Services contain the descriptions of services available in this target.
+	// Note that the FileRegistry might define more services to be available in the files,
+	// however, this list contains only the services that are actually served by the target.
+	// The list of services isn't required to contain full descriptions of all service methods,
+	// and can simply contain the names on the services,
+	// in which case it would still be usable for cases like gRPC proxying and gRPC-Web bridging.
 	Services []Service
 }
 
@@ -30,7 +57,10 @@ type Method struct {
 	Bindings        []Binding
 }
 
-// Proto properly unmarshals any message into an empty one, keeping all the fields as protoimpl.UnknownFields.
+// DummyMethod constructs a dummy method description containing emptypb.Empty messages as Input and Output.
+// Proto properly unmarshals any message into an empty one, keeping all the fields as protoimpl.UnknownFields,
+// so this can be used for unmarshaling/marshaling proto messages without needing to know their complete definitions,
+// Useful for cases such as barebones gRPC proxying and gRPC-Web bridging.
 func DummyMethod(svcName protoreflect.FullName, methodName protoreflect.Name) *Method {
 	return &Method{
 		RPCName:         CanonicalRPCName(svcName, methodName),
