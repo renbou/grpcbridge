@@ -2,7 +2,9 @@ syntax = "proto3";
 
 package grpcbridge.internal.bridgetest.testpb;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 
 option go_package = "github.com/renbou/grpcbridge/internal/bridgetest/testpb";
 
@@ -24,8 +26,35 @@ message Scalars {
   bytes bytes_value = 15;
 }
 
+enum Digits {
+  option allow_alias = true;
+  ZERO = 0;
+  NONE = 0;
+  ONE = 1;
+  TWO = 2;
+}
+
 message NonScalars {
+  message Child {
+    message GrandChild {
+      bytes bytes_value = 1;
+    }
+
+    oneof nested {
+      Digits digits = 1;
+      GrandChild grand_child = 2;
+    }
+  }
+
   map<string, string> str2str_map = 1;
   map<string, int32> str2int32_map = 2;
   map<int32, google.protobuf.Empty> int2empty_map = 3;
+  repeated string str_list = 4;
+  repeated Child msg_list = 5;
+  Digits root_digits = 6;
+  google.protobuf.Duration duration = 7;
+}
+
+message WellKnown {
+  google.protobuf.NullValue null_value = 1;
 }

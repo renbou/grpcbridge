@@ -13,16 +13,16 @@ import (
 
 var emptyMessageInstance Message = ConcreteMessage[emptypb.Empty]()
 
-// FileRegistry contains basic methods needed to discover proto files by their name and defined symbols.
+// FileResolver contains basic methods needed to discover proto files by their name and defined symbols.
 // It is used for implementing gRPC reflection and by [ParseTarget] for parsing [Target] definitions.
-type FileRegistry interface {
+type FileResolver interface {
 	protodesc.Resolver
 }
 
-// TypeRegistry contains the methods needed to resolve proto types for implementing gRPC reflection
+// TypeResolver contains the methods needed to resolve proto types for implementing gRPC reflection
 // or performing operations such as marshaling/unmarshaling protos to JSON.
 // It is implemented by *protoregistry.Types and *dynamicpb.Types.
-type TypeRegistry interface {
+type TypeResolver interface {
 	protoregistry.MessageTypeResolver
 	protoregistry.ExtensionTypeResolver
 }
@@ -30,10 +30,10 @@ type TypeRegistry interface {
 type Target struct {
 	// A target's name is arbitrary and only makes sense in the context of grpcbridge.
 	Name string
-	// FileRegistry is the registry of proto files defined for this target, using which the description was parsed.
-	FileRegistry FileRegistry
-	// TypeRegistry is the registry of proto type descriptors defined for this target, it should be derived from the FileRegistry.
-	TypeRegistry TypeRegistry
+	// FileRegistry is the resolver of proto files defined for this target, using which the description was parsed.
+	FileResolver FileResolver
+	// TypeRegistry is the resolver of proto type descriptors defined for this target, it should be derived from the FileRegistry.
+	TypeResolver TypeResolver
 	// Services contain the descriptions of services available in this target.
 	// Note that the FileRegistry might define more services to be available in the files,
 	// however, this list contains only the services that are actually served by the target.

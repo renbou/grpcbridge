@@ -12,8 +12,8 @@ import (
 
 var testSvcDesc = &Target{
 	Name:         "testpb",
-	FileRegistry: testpb.TestServiceFileRegistry,
-	TypeRegistry: testpb.TestServiceTypesRegistry,
+	FileResolver: testpb.TestServiceFileResolver,
+	TypeResolver: testpb.TestServiceTypesResolver,
 	Services: []Service{
 		{
 			Name: protoreflect.FullName(testpb.TestService_ServiceDesc.ServiceName),
@@ -48,8 +48,8 @@ func bridgedescOpts() cmp.Option {
 		cmp.Transformer("MessagesToNames", func(message Message) protoreflect.FullName {
 			return message.New().ProtoReflect().Descriptor().FullName()
 		}),
-		cmpopts.IgnoreInterfaces(struct{ FileRegistry }{}),
-		cmpopts.IgnoreInterfaces(struct{ TypeRegistry }{}),
+		cmpopts.IgnoreInterfaces(struct{ FileResolver }{}),
+		cmpopts.IgnoreInterfaces(struct{ TypeResolver }{}),
 	}
 }
 
@@ -90,7 +90,7 @@ func Test_ParseFileDescriptors_Ok(t *testing.T) {
 			}
 
 			// Act
-			result := ParseTarget("testpb", testpb.TestServiceFileRegistry, testpb.TestServiceTypesRegistry, serviceNames)
+			result := ParseTarget("testpb", testpb.TestServiceFileResolver, testpb.TestServiceTypesResolver, serviceNames)
 
 			// Assert
 			if diff := cmp.Diff(tt.wantTarget, result, bridgedescOpts()); diff != "" {

@@ -14,8 +14,8 @@ import (
 // because the file registry might contain an arbitrary number of services which aren't actually served by the target itself.
 // For example, a target's service can depend on health.proto, but not be actually running the base gRPC healthcheck service.
 // For this reason, the services available in the files are filtered and only the definitions of the ones requested are parsed.
-func ParseTarget(name string, files FileRegistry, types TypeRegistry, svcNames []protoreflect.FullName) *Target {
-	targetDesc := &Target{Name: name, FileRegistry: files, TypeRegistry: types, Services: make([]Service, len(svcNames))}
+func ParseTarget(name string, files FileResolver, types TypeResolver, svcNames []protoreflect.FullName) *Target {
+	targetDesc := &Target{Name: name, FileResolver: files, TypeResolver: types, Services: make([]Service, len(svcNames))}
 
 	for i, name := range svcNames {
 		// err ignored, returns NotFound and we don't care about it, the service will just be returned without defined methods.

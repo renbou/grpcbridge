@@ -7,6 +7,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.1
 	github.com/hashicorp/hcl/v2 v2.19.1
 	go.uber.org/goleak v1.3.0
+	golang.org/x/exp v0.0.0-20240409090435-93d18d7e34b8
 	google.golang.org/genproto/googleapis/api v0.0.0-20240125205218-1f4bbc51befe
 	google.golang.org/grpc v1.62.0
 	google.golang.org/protobuf v1.32.0
