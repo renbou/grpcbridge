@@ -19,13 +19,7 @@ import (
 	"errors"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
-	"github.com/renbou/grpcbridge/grpcadapter"
 )
-
-// ConnPool is implemented by [*grpcadapter.DialedPool] and is used by routers to retrieve connections to targets.
-type ConnPool interface {
-	Get(target string) (grpcadapter.ClientConn, bool)
-}
 
 // GRPCRoute contains the matched route information for a single gRPC request, returned by the RouteGRPC method of the routers.
 type GRPCRoute struct {
@@ -48,7 +42,7 @@ type HTTPRoute struct {
 
 // ErrAlreadyWatching is returned by the Watch() method on routers when a watcher already exists
 // for the specified target and a new one should not be created without closing the previous one first.
-var ErrAlreadyWatching = errors.New("watcher already exists for target")
+var ErrAlreadyWatching = errors.New("target already being watched")
 
 type httpStatusError struct {
 	code int

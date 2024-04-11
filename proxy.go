@@ -60,7 +60,7 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 	logger := s.logger.With("method", route.Method.RPCName)
 
 	// TODO(renbou): timeouts for stream initiation and Recv/Sends
-	outgoing, err := conn.BiDiStream(incoming.Context(), route.Method.RPCName)
+	outgoing, err := conn.Stream(incoming.Context(), route.Method.RPCName)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ type proxyingError struct {
 	outgoingErr error
 }
 
-func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming grpc.ServerStream, outgoing grpcadapter.BiDiStream, message bridgedesc.Message) proxyingError {
+func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming grpc.ServerStream, outgoing grpcadapter.ClientStream, message bridgedesc.Message) proxyingError {
 	defer logger.Debug("ending forwarding incoming to outgoing")
 
 	for {
@@ -135,7 +135,7 @@ func (s *GRPCProxy) forwardIncomingToOutgoing(logger bridgelog.Logger, incoming 
 	}
 }
 
-func (s *GRPCProxy) forwardOutgoingToIncoming(logger bridgelog.Logger, outgoing grpcadapter.BiDiStream, incoming grpc.ServerStream, message bridgedesc.Message) proxyingError {
+func (s *GRPCProxy) forwardOutgoingToIncoming(logger bridgelog.Logger, outgoing grpcadapter.ClientStream, incoming grpc.ServerStream, message bridgedesc.Message) proxyingError {
 	defer logger.Debug("ending forwarding outgoing to incoming")
 
 	for {

@@ -43,7 +43,7 @@ func (o PatternRouterOpts) withDefaults() PatternRouterOpts {
 //
 // [gRPC-Gateway]: https://github.com/grpc-ecosystem/grpc-gateway
 type PatternRouter struct {
-	pool       ConnPool
+	pool       grpcadapter.ClientPool
 	logger     bridgelog.Logger
 	routes     *mutablePatternRoutingTable
 	watcherSet *syncset.SyncSet[string]
@@ -54,7 +54,7 @@ type PatternRouter struct {
 // The connection pool will be used to perform a simple retrieval of the connection to a target by its name.
 // for more complex connection routing this router's [PatternRouter.RouteHTTP] can be wrapped to return a
 // different connection based on the matched method and HTTP request parameters.
-func NewPatternRouter(pool ConnPool, opts PatternRouterOpts) *PatternRouter {
+func NewPatternRouter(pool grpcadapter.ClientPool, opts PatternRouterOpts) *PatternRouter {
 	opts = opts.withDefaults()
 
 	return &PatternRouter{

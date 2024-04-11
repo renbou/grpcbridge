@@ -9,60 +9,46 @@ import (
 )
 
 type DialedPool struct {
-	mu     sync.Mutex
 	dialer func(context.Context, string) (*grpc.ClientConn, error)
-	conns  map[string]*DialedPoolController
+	conns  sync.Map // string -> *DialedPoolController
 }
 
 func NewDialedPool(dialer func(context.Context, string) (*grpc.ClientConn, error)) *DialedPool {
-	return &DialedPool{
-		dialer: dialer,
-		conns:  make(map[string]*DialedPoolController),
-	}
+	return &DialedPool{dialer: dialer}
 }
 
-// Build creates a new AdaptedClientConn and adds it to the pool without waiting for its dial to go through.
-// Calling build using the same target name without closing the previous connection will return the existing connection.
-func (p *DialedPool) Build(ctx context.Context, targetName, dialTarget string) *DialedPoolController {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	conn, ok := p.conns[targetName]
-	if ok {
-		return conn
+// Dial creates a new [*AdaptedClientConn] and adds it to the pool without waiting for its dial to go through.
+// It returns a [*DialedPoolController] which can be used to close the connection and remove it from the pool.
+//
+// It is an error to try Dial()ing the same targetName multiple times on a single DialedPool instance,
+// the previous [*DialedPoolController] must be explicitly used to close the connection before dialing a new one.
+// Instead of trying to synchronize such procedures, however, it's better to have a properly defined lifecycle
+// for each possible target, with clear logic about when it gets added or removed to/from all the components of a bridge.
+func (p *DialedPool) Dial(ctx context.Context, targetName, dialTarget string) (*DialedPoolController, error) {
+	controllerAny, loaded := p.conns.LoadOrStore(targetName, new(DialedPoolController))
+	if loaded {
+		return nil, ErrAlreadyDialed
 	}
 
-	unwrapped := AdaptedDial(func() (*grpc.ClientConn, error) {
+	conn := AdaptedDial(func() (*grpc.ClientConn, error) {
 		return p.dialer(ctx, dialTarget)
 	})
 
-	conn = &DialedPoolController{
-		pool: p,
-		name: targetName,
-		conn: WrapClientConn(unwrapped),
-	}
-	p.conns[targetName] = conn
+	controller := controllerAny.(*DialedPoolController)
+	controller.pool = p
+	controller.target = targetName
+	controller.conn = conn
 
-	return conn
+	return controller, nil
 }
 
 func (p *DialedPool) Get(target string) (ClientConn, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	controller, ok := p.conns[target]
+	controller, ok := p.conns.Load(target)
 	if !ok {
 		return nil, false
 	}
 
-	return controller.conn, true
-}
-
-func (p *DialedPool) remove(name string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	delete(p.conns, name)
+	return controller.(*DialedPoolController).conn, true
 }
 
 // DialedPoolController wraps an AdaptedClientConn created using a DialedPool,
@@ -70,7 +56,7 @@ func (p *DialedPool) remove(name string) {
 type DialedPoolController struct {
 	pool *DialedPool
 
-	name   string
+	target string
 	conn   ClientConn
 	closed atomic.Bool
 }
@@ -82,6 +68,6 @@ func (pw *DialedPoolController) Close() {
 		panic("grpcbridge: pooled client conn closed multiple times")
 	}
 
-	pw.pool.remove(pw.name)
+	pw.pool.conns.Delete(pw.target)
 	pw.conn.Close()
 }

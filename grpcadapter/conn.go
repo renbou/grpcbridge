@@ -25,9 +25,8 @@ type AdaptedClientConn struct {
 	err  error
 }
 
-// AdaptedDial calls dial in a separate goroutine,
-// and returns an AdaptedClientConn that will be ready when the dial completes.
-// Using the AdaptedClientConn prior to the dial completing is valid, but any calls will return an Unavailable status error.
+// AdaptedDial returns an AdaptedClientConn that will be ready when the dial, which is run in a separate goroutine, completes.
+// Using the AdaptedClientConn prior to the dial completing is valid, and the made calls will wait for the dial to complete, if possible.
 func AdaptedDial(dial func() (*grpc.ClientConn, error)) *AdaptedClientConn {
 	cc := &AdaptedClientConn{
 		err:      status.Error(codes.Unavailable, "grpcbridge: connection not yet dialed"),
@@ -76,7 +75,7 @@ func (cc *AdaptedClientConn) Close() {
 	}
 }
 
-func (cc *AdaptedClientConn) BiDiStream(ctx context.Context, method string) (*AdaptedBiDiStream, error) {
+func (cc *AdaptedClientConn) Stream(ctx context.Context, method string) (ClientStream, error) {
 	conn, err := cc.getConn(ctx)
 	if err != nil {
 		return nil, err
@@ -84,7 +83,7 @@ func (cc *AdaptedClientConn) BiDiStream(ctx context.Context, method string) (*Ad
 
 	// Create new context for the whole stream operation, and use the passed context only for the actual initialization.
 	streamCtx, cancel := context.WithCancel(context.Background())
-	wrapped := &AdaptedBiDiStream{
+	wrapped := &AdaptedClientStream{
 		closeFunc: sync.OnceFunc(cancel), // guaranteed to be called by Recv/Send on failure, otherwise needs to be called by caller
 	}
 

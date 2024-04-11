@@ -16,7 +16,7 @@ import (
 type client struct {
 	// Untyped stream instead of the ServerReflection_ServerReflectionInfoClient
 	// because both v1 and v1alpha are exactly the same, so messages for them can be interchanged.
-	stream  grpcadapter.BiDiStream
+	stream  grpcadapter.ClientStream
 	timeout time.Duration
 }
 
@@ -24,7 +24,7 @@ func connectClient(timeout time.Duration, conn grpcadapter.ClientConn, method st
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	stream, err := conn.BiDiStream(ctx, method)
+	stream, err := conn.Stream(ctx, method)
 	if err != nil {
 		return nil, fmt.Errorf("establishing reflection stream with method %q: %w", method, err)
 	}

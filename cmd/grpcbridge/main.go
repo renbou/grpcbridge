@@ -82,7 +82,7 @@ func mainImpl() error {
 	grpcProxy := grpcbridge.NewGRPCProxy(grpcRouter, grpcbridge.GPRCProxyOpts{Logger: logger})
 
 	for _, cfg := range cfg.Services {
-		_ = connPool.Build(context.Background(), cfg.Name, cfg.Target)
+		_, _ = connPool.Dial(context.Background(), cfg.Name, cfg.Target)
 
 		lw := &loggingWatcher{logger: logger}
 		gw, err := grpcRouter.Watch(cfg.Name)

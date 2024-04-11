@@ -36,7 +36,7 @@ func (o ServiceRouterOpts) withDefaults() ServiceRouterOpts {
 // This is useful as it allows description resolvers to be greatly simplified or optimized.
 // For example, the reflection resolver in [github.com/renbou/grpcbridge/reflection] has an OnlyServices option for this specific case.
 type ServiceRouter struct {
-	pool       ConnPool
+	pool       grpcadapter.ClientPool
 	logger     bridgelog.Logger
 	watcherSet *syncset.SyncSet[string]
 
@@ -57,7 +57,7 @@ type ServiceRouter struct {
 // The connection pool will be used to perform a simple retrieval of the connection to a target by its name.
 // for more complex connection routing this router's methods can be wrapped to return a
 // different connection based on the matched method and HTTP/GRPC request information.
-func NewServiceRouter(pool ConnPool, opts ServiceRouterOpts) *ServiceRouter {
+func NewServiceRouter(pool grpcadapter.ClientPool, opts ServiceRouterOpts) *ServiceRouter {
 	opts = opts.withDefaults()
 
 	return &ServiceRouter{

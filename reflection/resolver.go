@@ -34,11 +34,6 @@ var reflectionMethods = []string{
 	reflectionalphapb.ServerReflection_ServerReflectionInfo_FullMethodName, // v1alpha
 }
 
-// ConnPool is implemented by [*grpcadapter.DialedPool] and is used by ResolverBuilder to retrieve connections.
-type ConnPool interface {
-	Get(target string) (grpcadapter.ClientConn, bool)
-}
-
 // Watcher defines the interface of a watcher which is notified by the resolver of updates.
 type Watcher interface {
 	// UpdateDesc is called when the resolver has successfully received new descriptions.
@@ -102,12 +97,12 @@ func (opts ResolverOpts) withDefaults() ResolverOpts {
 type ResolverBuilder struct {
 	opts   ResolverOpts
 	logger bridgelog.Logger
-	pool   ConnPool
+	pool   grpcadapter.ClientPool
 }
 
 // NewResolverBuilder initializes a new [Resolver] builder with the specified connection pool and options,
 // both of which will be inherited by the resolvers later created using [ResolverBuilder.Build].
-func NewResolverBuilder(pool ConnPool, opts ResolverOpts) *ResolverBuilder {
+func NewResolverBuilder(pool grpcadapter.ClientPool, opts ResolverOpts) *ResolverBuilder {
 	opts = opts.withDefaults()
 
 	// additionally ignore gRPC services like reflection, health, channelz, etc.
@@ -149,7 +144,7 @@ type Resolver struct {
 	opts    ResolverOpts
 	target  string
 	logger  bridgelog.Logger
-	pool    ConnPool
+	pool    grpcadapter.ClientPool
 	watcher Watcher
 	// hash of all file descriptors retrieved on the previous iteration
 	lastProtoHash string

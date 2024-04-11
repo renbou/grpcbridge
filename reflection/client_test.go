@@ -292,7 +292,7 @@ func Test_client_SendErrors(t *testing.T) {
 
 	// Return a client with a connection which is immediately closed.
 	closedConnClient := func(t *testing.T, name string) *client {
-		controller := pool.Build(context.Background(), name, bridgetest.TestTarget)
+		controller, _ := pool.Dial(context.Background(), name, bridgetest.TestTarget)
 		conn, _ := pool.Get(name)
 		client := mustClient(t, conn)
 		controller.Close()

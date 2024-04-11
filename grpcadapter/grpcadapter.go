@@ -2,41 +2,35 @@ package grpcadapter
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/protobuf/proto"
 )
 
-var _ ClientConn = (*wrappedConnection[*AdaptedBiDiStream])(nil)
+var ErrAlreadyDialed = errors.New("connection already dialed")
 
-type ClientConn interface {
-	Close()
-	BiDiStream(ctx context.Context, method string) (BiDiStream, error)
+var (
+	_ ClientConn   = (*AdaptedClientConn)(nil)
+	_ ClientStream = (*AdaptedClientStream)(nil)
+)
+
+type ClientPool interface {
+	Get(target string) (ClientConn, bool)
 }
 
-type BiDiStream interface {
+type ClientConn interface {
+	Stream(ctx context.Context, method string) (ClientStream, error)
+	Close()
+}
+
+type ClientStream interface {
 	Send(context.Context, proto.Message) error
 	Recv(context.Context, proto.Message) error
 	CloseSend()
 	Close()
 }
 
-type GenericClientConn[BD BiDiStream] interface {
-	Close()
-	BiDiStream(ctx context.Context, method string) (BD, error)
-}
-
-func WrapClientConn[BD BiDiStream](conn GenericClientConn[BD]) ClientConn {
-	return &wrappedConnection[BD]{conn}
-}
-
-type wrappedConnection[BD BiDiStream] struct {
-	conn GenericClientConn[BD]
-}
-
-func (c *wrappedConnection[BD]) Close() {
-	c.conn.Close()
-}
-
-func (c *wrappedConnection[BD]) BiDiStream(ctx context.Context, method string) (BiDiStream, error) {
-	return c.conn.BiDiStream(ctx, method)
+type ServerStream interface {
+	Send(context.Context, proto.Message) error
+	Recv(context.Context, proto.Message) error
 }
