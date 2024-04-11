@@ -106,7 +106,7 @@ func mainImpl() error {
 		return err
 	}
 
-	grpcServer := grpc.NewServer(grpcProxy.AsOption())
+	grpcServer := grpc.NewServer(grpcProxy.AsServerOption())
 
 	go func() {
 		_ = grpcServer.Serve(lis)
