@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
@@ -18,16 +19,32 @@ import (
 )
 
 type fakeWatcher struct {
-	desc   *bridgedesc.Target
-	errors []error
+	desc      *bridgedesc.Target
+	errors    []error
+	done      chan struct{}
+	closeDone func()
+}
+
+func newFakeWatcher() *fakeWatcher {
+	done := make(chan struct{})
+	return &fakeWatcher{
+		done:      done,
+		closeDone: sync.OnceFunc(func() { close(done) }),
+	}
+}
+
+func (fw *fakeWatcher) wait() {
+	<-fw.done
 }
 
 func (fw *fakeWatcher) UpdateDesc(desc *bridgedesc.Target) {
 	fw.desc = desc
+	fw.closeDone()
 }
 
 func (fw *fakeWatcher) ReportError(err error) {
 	fw.errors = append(fw.errors, err)
+	fw.closeDone()
 }
 
 // stupidReflectionServer emulates a gRPC reflection server
@@ -168,12 +185,13 @@ func Test_Resolver(t *testing.T) {
 		PollManually: true,
 	})
 
-	watcher := new(fakeWatcher)
+	watcher := newFakeWatcher()
 
 	// Act
 	// Build and immediatelly close the resolver.
 	// watch() will execute once and report the results,
 	resolver := builder.Build(bridgetest.TestTarget, watcher)
+	watcher.wait()
 	resolver.Close()
 
 	// Assert
