@@ -39,9 +39,8 @@ type ServerStream interface {
 
 type ForwardS2C struct {
 	Incoming ServerStream
-	Input    bridgedesc.Message
 	Outgoing ClientStream
-	Output   bridgedesc.Message
+	Method   *bridgedesc.Method
 }
 
 // ForwardServerToClient forwards an incoming ServerStream to an outgoing ClientStream via 2 concurrent goroutines.
@@ -57,11 +56,11 @@ func ForwardServerToClient(ctx context.Context, params ForwardS2C) error {
 	defer cancel()
 
 	go func() {
-		i2oErrCh <- forwardIncomingToOutgoing(ctx, params.Incoming, params.Outgoing, params.Input)
+		i2oErrCh <- forwardIncomingToOutgoing(ctx, params.Incoming, params.Outgoing, params.Method.Input)
 	}()
 
 	go func() {
-		o2iErrCh <- forwardOutgoingToIncoming(ctx, params.Outgoing, params.Incoming, params.Output)
+		o2iErrCh <- forwardOutgoingToIncoming(ctx, params.Outgoing, params.Incoming, params.Method.Output)
 	}()
 
 	// Handle proxying errors and return them when needed.

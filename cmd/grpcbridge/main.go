@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,8 @@ import (
 	"github.com/renbou/grpcbridge/internal/config"
 	"github.com/renbou/grpcbridge/reflection"
 	"github.com/renbou/grpcbridge/routing"
+	"github.com/renbou/grpcbridge/transcoding"
+	"github.com/renbou/grpcbridge/webbridge"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -78,8 +81,10 @@ func mainImpl() error {
 
 	grpcRouter := routing.NewServiceRouter(connPool, routing.ServiceRouterOpts{Logger: logger})
 	httpRouter := routing.NewPatternRouter(connPool, routing.PatternRouterOpts{Logger: logger})
+	transcoder := transcoding.NewStandardTranscoder(transcoding.StandardTranscoderOpts{})
 
 	grpcProxy := grpcbridge.NewGRPCProxy(grpcRouter, grpcbridge.GPRCProxyOpts{Logger: logger})
+	httpBridge := webbridge.NewHTTPTranscodedBridge(httpRouter, transcoder)
 
 	for _, cfg := range cfg.Services {
 		_, _ = connPool.Dial(context.Background(), cfg.Name, cfg.Target)
@@ -112,11 +117,24 @@ func mainImpl() error {
 		_ = grpcServer.Serve(lis)
 	}()
 
+	httpServer := &http.Server{
+		Addr:    ":22222",
+		Handler: httpBridge,
+	}
+
+	go func() {
+		_ = httpServer.ListenAndServe()
+	}()
+
 	shutdownCh := make(chan os.Signal, 1)
 	signal.Notify(shutdownCh, os.Interrupt, syscall.SIGTERM)
 	<-shutdownCh
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
 	grpcServer.Stop()
+	httpServer.Shutdown(ctx)
 
 	return nil
 }

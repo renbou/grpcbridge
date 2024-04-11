@@ -77,6 +77,10 @@ func (pr *PatternRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTT
 	// Try to follow the same steps as in https://github.com/grpc-ecosystem/grpc-gateway/blob/main/runtime/mux.go#L328 (ServeMux.ServeHTTP).
 	// Specifically, use RawPath for pattern matching, since it will be properly decoded by the pattern itself.
 	path := r.URL.RawPath
+	if path == "" {
+		path = r.URL.Path
+	}
+
 	if !strings.HasPrefix(path, "/") {
 		return nil, HTTPRoute{}, status.Error(codes.InvalidArgument, http.StatusText(http.StatusBadRequest))
 	}

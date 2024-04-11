@@ -17,8 +17,10 @@ package routing
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
+	"github.com/renbou/grpcbridge/grpcadapter"
 )
 
 // GRPCRoute contains the matched route information for a single gRPC request, returned by the RouteGRPC method of the routers.
@@ -44,19 +46,11 @@ type HTTPRoute struct {
 // for the specified target and a new one should not be created without closing the previous one first.
 var ErrAlreadyWatching = errors.New("target already being watched")
 
-type httpStatusError struct {
-	code int
-	err  error
-}
-
-func (e *httpStatusError) Error() string {
-	return e.err.Error()
-}
-
-func (e *httpStatusError) Unwrap() error {
-	return e.err
-}
-
-func (e *httpStatusError) HTTPStatus() int {
-	return e.code
+// HTTPRouter is the interface implemented by routers capable of routing HTTP requests.
+// RouteHTTP can use any information available in the request to perform routing and
+// return a connection to the target as well as the matched route information, including any path parameters.
+// Errors returned by RouteHTTP should preferrably be gRPC status errors with HTTP-appropriate codes like NotFound set,
+// but they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
+type HTTPRouter interface {
+	RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTTPRoute, error)
 }

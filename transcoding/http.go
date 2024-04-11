@@ -10,6 +10,9 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/utilities"
 	"github.com/renbou/grpcbridge/internal/gwquery"
+	"github.com/renbou/grpcbridge/internal/httperr"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -86,7 +89,7 @@ func NewStandardTranscoder(opts StandardTranscoderOpts) *StandardTranscoder {
 }
 
 // Bind constructs request and response message transcoders bound to a single specific [HTTPRequest],
-// and returns false if no marshalers were found for the specified Content-Type and Accept headers.
+// and returns a status error of StatusUnsupportedMediaType if no marshalers were found for the specified Content-Type and Accept headers.
 // At the minimum, the request must specify a Content-Type header, which will also be used as a default for the
 // response message transcoder, unless a different MIME type is specified in the Accept header.
 //
@@ -96,10 +99,10 @@ func NewStandardTranscoder(opts StandardTranscoderOpts) *StandardTranscoder {
 //
 // Bind expects *most* of the fields of HTTPRequest to be non-nil, for example, using the type resolver in HTTPRequest.Target
 // for transcoding complex message types.
-func (t *StandardTranscoder) Bind(req HTTPRequest) (HTTPRequestTranscoder, HTTPResponseTranscoder, bool) {
-	requestMarshaler, requestMimeType, ok := t.pickRequestMarshaler(&req)
-	if !ok {
-		return nil, nil, false
+func (t *StandardTranscoder) Bind(req HTTPRequest) (HTTPRequestTranscoder, HTTPResponseTranscoder, error) {
+	requestMarshaler, requestMimeType, err := t.pickRequestMarshaler(&req)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	responseMarshaler, responseMimeType, ok := t.pickResponseMarshaler(&req)
@@ -112,10 +115,10 @@ func (t *StandardTranscoder) Bind(req HTTPRequest) (HTTPRequestTranscoder, HTTPR
 	in := newRequestTranscoder(bt, requestMarshaler, requestMimeType)
 	out := newResponseTranscoder(bt, responseMarshaler, responseMimeType)
 
-	return in, out, true
+	return in, out, nil
 }
 
-func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, string, bool) {
+func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, string, error) {
 	for _, ct := range req.RawRequest.Header[contentTypeHeader] {
 		mt, _, err := mime.ParseMediaType(ct)
 		if err != nil {
@@ -123,11 +126,11 @@ func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, 
 		}
 
 		if marshaler, ok := t.mimeMarshalers[mt]; ok {
-			return marshaler, mt, true
+			return marshaler, mt, nil
 		}
 	}
 
-	return nil, "", false
+	return nil, "", httperr.Status(http.StatusUnsupportedMediaType, status.Errorf(codes.InvalidArgument, http.StatusText(http.StatusUnsupportedMediaType)))
 }
 
 func (t *StandardTranscoder) pickResponseMarshaler(req *HTTPRequest) (Marshaler, string, bool) {
@@ -167,49 +170,52 @@ type standardRequestTranscoder struct {
 
 // Transcode transcodes a new request according to the rules specified in http.proto,
 // https://github.com/googleapis/googleapis/blob/bbcce1d481a148676634603794c6e697ae3b58c7/google/api/http.proto#L208.
-func (t *standardRequestTranscoder) Transcode(b []byte) (proto.Message, error) {
-	return t.transcodeFunc(func(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
+func (t *standardRequestTranscoder) Transcode(b []byte, protomsg proto.Message) error {
+	return t.transcodeFunc(false, protomsg, func(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
 		return t.marshaler.Unmarshal(t.req.Target.TypeResolver, b, msg, fd)
 	})
 }
 
 // transcodeFunc is a helper to support transcoding using both Unmarshal and a Decoder.
-func (t *standardRequestTranscoder) transcodeFunc(f func(protoreflect.Message, protoreflect.FieldDescriptor) error) (proto.Message, error) {
-	reqMsg := t.req.Method.Input.New()
-
+func (t *standardRequestTranscoder) transcodeFunc(supportsEOF bool, reqMsg proto.Message, f func(protoreflect.Message, protoreflect.FieldDescriptor) error) error {
 	// Initially fill the request body using the specified path, if any.
 	if t.req.Binding.RequestBodyPath != "" {
 		msg, fd, err := traverseFieldPath(reqMsg.ProtoReflect(), t.req.Binding.RequestBodyPath)
 		if err != nil {
-			return nil, fmt.Errorf("request body path %q: %w", t.req.Binding.RequestBodyPath, err)
+			return status.Errorf(codes.Internal, "request body path %q: %v", t.req.Binding.RequestBodyPath, err)
 		}
 
 		if err := f(msg, fd); err != nil {
-			return nil, fmt.Errorf("unmarshaling request body: %w", err)
+			// EOF should only be returned during streaming, not during a single unmarshal.
+			if supportsEOF {
+				return fmt.Errorf("unmarshaling request body: %w", err)
+			} else {
+				return status.Errorf(codes.InvalidArgument, "unmarshaling request body: %s", err)
+			}
 		}
 	}
 
 	// Next, overwrite values using the path parameters, since they take priority over everything.
 	for k, v := range t.req.PathParams {
 		if err := gwquery.PopulateFieldFromPath(reqMsg, k, v); err != nil {
-			return nil, fmt.Errorf("type mismatch, parameter: %s, error: %w", k, err)
+			return fmt.Errorf("type mismatch, parameter: %s, error: %w", k, err)
 		}
 	}
 
 	// Finally, use the query parameters, if any should be used, to populate the rest.
 	if !t.shouldParseQuery() {
-		return reqMsg, nil
+		return nil
 	}
 
 	if err := t.req.RawRequest.ParseForm(); err != nil {
-		return nil, fmt.Errorf("parsing query parameters: %w", err)
+		return fmt.Errorf("parsing query parameters: %w", err)
 	}
 
 	if err := runtime.PopulateQueryParameters(reqMsg, t.req.RawRequest.Form, t.queryParamFilter()); err != nil {
-		return nil, fmt.Errorf("parsing query parameters: %w", err)
+		return fmt.Errorf("parsing query parameters: %w", err)
 	}
 
-	return reqMsg, nil
+	return nil
 }
 
 func (t *standardRequestTranscoder) shouldParseQuery() bool {
@@ -300,7 +306,7 @@ type standardRequestStreamTranscoder struct {
 	streamer StreamMarshaler
 }
 
-func (st *standardRequestStreamTranscoder) Stream(r io.Reader) RequestStream {
+func (st *standardRequestStreamTranscoder) Stream(r io.Reader) TranscodedStream {
 	return &standardRequestStream{standardRequestStreamTranscoder: st, decoder: st.streamer.NewDecoder(st.req.Target.TypeResolver, r)}
 }
 
@@ -310,8 +316,8 @@ type standardRequestStream struct {
 }
 
 // Transcode is the streaming version of request transcoding which uses a Decoder instead of Unmarshal.
-func (rs *standardRequestStream) Transcode() (proto.Message, error) {
-	return rs.transcodeFunc(rs.decoder.Decode)
+func (rs *standardRequestStream) Transcode(protomsg proto.Message) error {
+	return rs.transcodeFunc(true, protomsg, rs.decoder.Decode)
 }
 
 // standardResponseStreamTranscoder is a wrapper around [defaultOutgoingTranscoder] for marshalers supporting streaming.
@@ -320,7 +326,7 @@ type standardResponseStreamTranscoder struct {
 	streamer StreamMarshaler
 }
 
-func (st *standardResponseStreamTranscoder) Stream(w io.Writer) ResponseStream {
+func (st *standardResponseStreamTranscoder) Stream(w io.Writer) TranscodedStream {
 	return &standardResponseStream{standardResponseStreamTranscoder: st, encoder: st.streamer.NewEncoder(st.req.Target.TypeResolver, w)}
 }
 

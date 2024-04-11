@@ -75,18 +75,24 @@ type HTTPRequest struct {
 
 // HTTPTranscoder is the interface required to be implemented by a transcoder suitable for transcoding requests originating from HTTP.
 // The only method, Bind, should return two transcoders for transcoding the request and response messages, respectively,
-// or false, if no suitable transcoders for the request are available (e.g. the request specifies an unsupported Content-Type).
+// or an error, if no suitable transcoders for the request are available (e.g. the request specifies an unsupported Content-Type).
+// Errors returned by Bind should preferrably be gRPC status errors, but they can additionally implement
+// interface { HTTPStatus() int } to return a custom HTTP status code, such as 415 (UnsupportedMediaType).
 type HTTPTranscoder interface {
-	Bind(HTTPRequest) (HTTPRequestTranscoder, HTTPResponseTranscoder, bool)
+	Bind(HTTPRequest) (HTTPRequestTranscoder, HTTPResponseTranscoder, error)
 }
 
 // HTTPRequestTranscoder is responsible for transcoding request messages bound to a specific HTTP request.
+// Errors returned by Transcode should be gRPC status errors to differentiate between internal errors and invalid requests,
+// and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
 type HTTPRequestTranscoder interface {
-	Transcode([]byte) (proto.Message, error)
+	Transcode([]byte, proto.Message) error
 	ContentType() string
 }
 
 // HTTPResponseTranscoder is responsible for transcoding response messages bound to a specific HTTP request.
+// Errors returned by Transcode should be gRPC status errors to differentiate between internal errors and invalid requests,
+// and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
 type HTTPResponseTranscoder interface {
 	Transcode(proto.Message) ([]byte, error)
 	ContentType() string
@@ -95,21 +101,20 @@ type HTTPResponseTranscoder interface {
 // RequestStreamTranscoder should be implemented by bound transcoders supporting receiving request messages over a binary stream,
 // such as an HTTP request body.
 type RequestStreamTranscoder interface {
-	Stream(io.Reader) RequestStream
-}
-
-// RequestStream is a stream of request messages, which should be transcoded by a [RequestStreamTranscoder].
-type RequestStream interface {
-	Transcode() (proto.Message, error)
+	Stream(io.Reader) TranscodedStream
 }
 
 // ResponseStreamTranscoder should be implemented by bound transcoders supporting sending response messages over a binary stream,
 // such as an HTTP response body.
 type ResponseStreamTranscoder interface {
-	Stream(io.Writer) ResponseStream
+	Stream(io.Writer) TranscodedStream
 }
 
-// ResponseStream is a stream of response messages, which should be transcoded by a [ResponseStreamTranscoder].
-type ResponseStream interface {
+// TranscodedStream is a stream of transcoded messages, which are being read or written to/from a stream.
+// The same comment applies to errors returned by the streaming Transcode as for [HTTPResponseTranscoder],
+// but, additionally, a TranscodedStream wrapping an io.Reader should return an error satisifying errors.Is(err, io.EOF)
+// to indicate that the stream has ended, unless a partial read occurs and the stream ends abruptly.
+// In other words, a returned io.EOF indicates successful end of stream, and other errors should be used when that is not the case.
+type TranscodedStream interface {
 	Transcode(proto.Message) error
 }

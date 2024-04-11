@@ -71,10 +71,9 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 	defer logger.Debug("ended proxying gRPC stream")
 
 	return grpcadapter.ForwardServerToClient(incoming.Context(), grpcadapter.ForwardS2C{
+		Method:   route.Method,
 		Incoming: grpcServerStream{incoming},
-		Input:    route.Method.Input,
 		Outgoing: outgoing,
-		Output:   route.Method.Output,
 	})
 }
 

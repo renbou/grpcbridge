@@ -10,6 +10,7 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"github.com/renbou/grpcbridge/internal/httperr"
 	"github.com/renbou/grpcbridge/internal/syncset"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -118,7 +119,7 @@ func (sr *ServiceRouter) RouteGRPC(ctx context.Context) (grpcadapter.ClientConn,
 // Additionally, an error implementing interface { HTTPStatus() int } can be returned, which should be used to set a custom status code.
 func (sr *ServiceRouter) RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTTPRoute, error) {
 	if r.Method != http.MethodPost {
-		return nil, HTTPRoute{}, &httpStatusError{code: http.StatusMethodNotAllowed, err: status.Errorf(codes.Unimplemented, http.StatusText(http.StatusMethodNotAllowed))}
+		return nil, HTTPRoute{}, httperr.Status(http.StatusMethodNotAllowed, status.Errorf(codes.Unimplemented, http.StatusText(http.StatusMethodNotAllowed)))
 	}
 
 	rpcName := r.URL.RawPath

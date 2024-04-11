@@ -32,7 +32,6 @@ func (r *requestValues) prepare() HTTPRequest {
 			FileResolver: testpb.TestServiceFileResolver,
 			TypeResolver: testpb.TestServiceTypesResolver,
 		},
-		Method:     &bridgedesc.Method{Input: r.message},
 		Binding:    &bridgedesc.Binding{RequestBodyPath: r.bodyPath},
 		PathParams: r.pathParams,
 		RawRequest: &http.Request{
@@ -61,9 +60,9 @@ func (r *responseValues) prepare() HTTPRequest {
 }
 
 func mustBind(t *testing.T, ht HTTPTranscoder, req HTTPRequest) (HTTPRequestTranscoder, HTTPResponseTranscoder) {
-	reqTranscoder, respTranscoder, ok := ht.Bind(req)
-	if !ok {
-		t.Fatalf("Bind() returned ok = false, expected Bind to succeed and transcoders")
+	reqTranscoder, respTranscoder, err := ht.Bind(req)
+	if err != nil {
+		t.Fatalf("Bind() returned error = %q, expected Bind to succeed and return transcoders", err)
 	}
 
 	if reqTranscoder.ContentType() != contentTypeJSON {
@@ -164,7 +163,8 @@ func Test_StandardTranscoder_Request_Ok(t *testing.T) {
 			reqTranscoder, _ := mustBind(t, transcoder, tt.request.prepare())
 
 			// Act
-			msg, transcodeErr := reqTranscoder.Transcode([]byte(tt.data))
+			msg := tt.request.message.New()
+			transcodeErr := reqTranscoder.Transcode([]byte(tt.data), msg)
 
 			// Assert
 			if transcodeErr != nil {
@@ -244,7 +244,8 @@ func Test_StandardTranscoder_Request_Error(t *testing.T) {
 			reqTranscoder, _ := mustBind(t, transcoder, tt.request.prepare())
 
 			// Act
-			_, transcodeErr := reqTranscoder.Transcode([]byte(tt.data))
+			msg := tt.request.message.New()
+			transcodeErr := reqTranscoder.Transcode([]byte(tt.data), msg)
 
 			// Assert
 			if transcodeErr == nil {
@@ -386,8 +387,9 @@ func Test_StandardTranscoder_RequestStream(t *testing.T) {
 	messages := make([]proto.Message, 0, len(wantMessages))
 
 	for i := 0; i < 5; i++ {
-		msg, err := stream.Transcode()
-		if errors.Is(err, io.EOF) {
+		msg := request.message.New()
+
+		if err := stream.Transcode(msg); errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
 			t.Fatalf("RequestStream.Transcode() returned non-nil error = %q", err)
