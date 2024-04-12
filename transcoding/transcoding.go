@@ -83,22 +83,33 @@ type HTTPTranscoder interface {
 }
 
 // HTTPRequestTranscoder is responsible for transcoding request messages bound to a specific HTTP request.
-// Errors returned by Transcode should be gRPC status errors to differentiate between internal errors and invalid requests,
+//
+// Errors returned by Transcode should be gRPC status errors to differentiate between internal errors and invalid requests
+// (by default non-status errors should be interpreted by transcoder users as InvalidArgument),
 // and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
+//
+// ContentType accepts a message since some requests might have dynamic content type mapping.
+// By default, however, the [StandardTranscoder] doesn't support this, and always returns a static content type.
 type HTTPRequestTranscoder interface {
 	Transcode([]byte, proto.Message) error
-	ContentType() string
+	ContentType(proto.Message) string
 }
 
 // HTTPResponseTranscoder is responsible for transcoding response messages bound to a specific HTTP request.
+//
 // Transcode should support not only the response message specified in the HTTPRequest from which this transcoder was bound,
 // but also gRPC [*google.golang.org/genproto/googleapis/rpc/status.Status] messages,
 // which are marshaled to return complete gRPC status codes along with the message and details.
-// Errors returned by Transcode should be gRPC status errors to differentiate between internal errors and invalid requests,
+//
+// Errors returned by Transcode can be gRPC status errors to set custom status info (by default errors would be interpreted as Internal),
 // and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
+//
+// ContentType accepts a message since some responses might have dynamic content type mapping, such as [google/api/httpbody.proto].
+//
+// [google/api/httpbody.proto]: https://github.com/googleapis/googleapis/blob/master/google/api/httpbody.proto
 type HTTPResponseTranscoder interface {
 	Transcode(proto.Message) ([]byte, error)
-	ContentType() string
+	ContentType(proto.Message) string
 }
 
 // RequestStreamTranscoder should be implemented by bound transcoders supporting receiving request messages over a binary stream,
@@ -114,9 +125,9 @@ type ResponseStreamTranscoder interface {
 }
 
 // TranscodedStream is a stream of transcoded messages, which are being read or written to/from a stream.
-// The same comment applies to errors returned by the streaming Transcode as for [HTTPResponseTranscoder],
+// The same remarks apply to errors returned by the streaming Transcode as for [HTTPRequestTranscoder]/[HTTPResponseTranscoder],
 // but, additionally, a TranscodedStream wrapping an io.Reader should return an error satisifying errors.Is(err, io.EOF)
-// to indicate that the stream has ended, unless a partial read occurs and the stream ends abruptly.
+// when the stream has ended, unless a partial read occurs and the stream ends abruptly.
 // In other words, a returned io.EOF indicates successful end of stream, and other errors should be used when that is not the case.
 type TranscodedStream interface {
 	Transcode(proto.Message) error

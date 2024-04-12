@@ -69,12 +69,12 @@ func mustBind(t *testing.T, ht HTTPTranscoder, req HTTPRequest) (HTTPRequestTran
 		t.Fatalf("Bind() returned error = %q, expected Bind to succeed and return transcoders", err)
 	}
 
-	if reqTranscoder.ContentType() != contentTypeJSON {
-		t.Fatalf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(), contentTypeJSON)
+	if reqTranscoder.ContentType(nil) != contentTypeJSON {
+		t.Fatalf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(nil), contentTypeJSON)
 	}
 
-	if respTranscoder.ContentType() != contentTypeJSON {
-		t.Fatalf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(), contentTypeJSON)
+	if respTranscoder.ContentType(nil) != contentTypeJSON {
+		t.Fatalf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(nil), contentTypeJSON)
 	}
 
 	if _, ok := reqTranscoder.(RequestStreamTranscoder); !ok {
@@ -519,12 +519,12 @@ func Test_StandardTranscoder_CustomResponseMarshaler(t *testing.T) {
 		t.Fatalf("Bind() returned error = %q, expected Bind to succeed and return transcoders", bindErr)
 	}
 
-	if reqTranscoder.ContentType() != contentTypeJSON {
-		t.Errorf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(), contentTypeJSON)
+	if reqTranscoder.ContentType(nil) != contentTypeJSON {
+		t.Errorf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(nil), contentTypeJSON)
 	}
 
-	if respTranscoder.ContentType() != contentTypePNG {
-		t.Errorf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(), contentTypePNG)
+	if respTranscoder.ContentType(nil) != contentTypePNG {
+		t.Errorf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(nil), contentTypePNG)
 	}
 }
 

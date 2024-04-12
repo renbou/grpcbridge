@@ -1,6 +1,7 @@
 package transcoding
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -84,6 +85,7 @@ func NewStandardTranscoder(opts StandardTranscoderOpts) *StandardTranscoder {
 // and returns a status error of StatusUnsupportedMediaType if no marshalers were found for the specified Content-Type and Accept headers.
 // At the minimum, the request must specify a Content-Type header, which will also be used as a default for the
 // response message transcoder, unless a different MIME type is specified in the Accept header.
+// The returned transcoders' ContentType methods will return the value with which they have been matched.
 //
 // If a chosen marshaler supports streaming via [StreamMarshaler], the according transcoder will also
 // implement the [RequestStreamTranscoder] and [ResponseStreamTranscoder], which can be used to establish
@@ -177,20 +179,18 @@ func (t *standardRequestTranscoder) transcodeFunc(supportsEOF bool, reqMsg proto
 			return status.Errorf(codes.Internal, "request body path %q: %v", t.req.Binding.RequestBodyPath, err)
 		}
 
-		if err := f(msg, fd); err != nil {
+		if err := f(msg, fd); errors.Is(err, io.EOF) && supportsEOF {
 			// EOF should only be returned during streaming, not during a single unmarshal.
-			if supportsEOF {
-				return fmt.Errorf("unmarshaling request body: %w", err)
-			} else {
-				return status.Errorf(codes.InvalidArgument, "unmarshaling request body: %s", err)
-			}
+			return fmt.Errorf("unmarshaling request body: %w", err)
+		} else if err != nil {
+			return status.Errorf(codes.InvalidArgument, "unmarshaling request body: %s", err)
 		}
 	}
 
 	// Next, overwrite values using the path parameters, since they take priority over everything.
 	for k, v := range t.req.PathParams {
 		if err := gwquery.PopulateFieldFromPath(reqMsg, k, v); err != nil {
-			return fmt.Errorf("type mismatch, parameter: %s, error: %w", k, err)
+			return status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %s", k, err)
 		}
 	}
 
@@ -200,11 +200,11 @@ func (t *standardRequestTranscoder) transcodeFunc(supportsEOF bool, reqMsg proto
 	}
 
 	if err := t.req.RawRequest.ParseForm(); err != nil {
-		return fmt.Errorf("parsing query parameters: %w", err)
+		return status.Errorf(codes.InvalidArgument, "parsing query parameters: %s", err)
 	}
 
 	if err := runtime.PopulateQueryParameters(reqMsg, t.req.RawRequest.Form, t.queryParamFilter()); err != nil {
-		return fmt.Errorf("parsing query parameters: %w", err)
+		return status.Errorf(codes.InvalidArgument, "parsing query parameters: %s", err)
 	}
 
 	return nil
@@ -238,7 +238,7 @@ func (t *standardRequestTranscoder) queryParamFilter() *utilities.DoubleArray {
 	return t.queryFilter
 }
 
-func (t *standardRequestTranscoder) ContentType() string {
+func (t *standardRequestTranscoder) ContentType(proto.Message) string {
 	return t.mimeType
 }
 
@@ -278,7 +278,7 @@ func (t *standardResponseTranscoder) Transcode(protomsg proto.Message) ([]byte, 
 func (t *standardResponseTranscoder) transcodeFunc(protomsg proto.Message, f func(protoreflect.Message, protoreflect.FieldDescriptor) error) error {
 	if protomsg.ProtoReflect().Descriptor().FullName() == "google.rpc.Status" {
 		if err := f(protomsg.ProtoReflect(), nil); err != nil {
-			return fmt.Errorf("marshaling response status: %w", err)
+			return status.Errorf(codes.Internal, "marshaling response status: %s", err)
 		}
 
 		return nil
@@ -286,17 +286,17 @@ func (t *standardResponseTranscoder) transcodeFunc(protomsg proto.Message, f fun
 
 	msg, fd, err := traverseFieldPath(protomsg.ProtoReflect(), t.req.Binding.ResponseBodyPath)
 	if err != nil {
-		return fmt.Errorf("response body path %q: %w", t.req.Binding.ResponseBodyPath, err)
+		return status.Errorf(codes.Internal, "response body path %q: %s", t.req.Binding.ResponseBodyPath, err)
 	}
 
 	if err := f(msg, fd); err != nil {
-		return fmt.Errorf("marshaling response body: %w", err)
+		return status.Errorf(codes.Internal, "marshaling response body: %s", err)
 	}
 
 	return nil
 }
 
-func (t *standardResponseTranscoder) ContentType() string {
+func (t *standardResponseTranscoder) ContentType(proto.Message) string {
 	return t.mimeType
 }
 

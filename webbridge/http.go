@@ -8,6 +8,8 @@ import (
 	"github.com/renbou/grpcbridge/grpcadapter"
 	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -20,10 +22,12 @@ func NewHTTPTranscodedBridge(router routing.HTTPRouter, transcoder transcoding.H
 	return &HTTPTranscodedBridge{router: router, transcoder: transcoder}
 }
 
-func (b *HTTPTranscodedBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (b *HTTPTranscodedBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *http.Request) {
+	w := &responseWrapper{ResponseWriter: unwrappedRW}
+
 	conn, route, err := b.router.RouteHTTP(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, nil, err)
 		return
 	}
 
@@ -36,13 +40,14 @@ func (b *HTTPTranscodedBridge) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		PathParams: route.PathParams,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, nil, err)
 		return
 	}
 
+	// At this point all responses including errors should be transcoded to get properly parsed by a client.
 	outgoing, err := conn.Stream(r.Context(), route.Method.RPCName)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, resptc, err)
 		return
 	}
 
@@ -52,24 +57,33 @@ func (b *HTTPTranscodedBridge) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		Method:   route.Method,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, resptc, err)
 	}
 }
 
 type unaryHTTPStream struct {
-	w      http.ResponseWriter
+	w      *responseWrapper
 	r      *http.Request
 	reqtc  transcoding.HTTPRequestTranscoder
 	resptc transcoding.HTTPResponseTranscoder
 	read   bool
+	sent   bool
 }
 
 func (s *unaryHTTPStream) Send(_ context.Context, msg proto.Message) error {
-	b, err := s.resptc.Transcode(msg)
-	if err != nil {
-		return err
+	if s.sent {
+		return status.Error(codes.Internal, "grpcbridge: tried sending second response on unary stream")
 	}
 
+	b, err := s.resptc.Transcode(msg)
+	if err != nil {
+		return requestTranscodingError(err)
+	}
+
+	// sent is set here, because Write can perform a partial write and still return an error
+	s.sent = true
+
+	s.w.Header()[contentTypeHeader] = []string{s.resptc.ContentType(msg)}
 	_, err = s.w.Write(b)
 	return err
 }
@@ -81,10 +95,10 @@ func (s *unaryHTTPStream) Recv(_ context.Context, msg proto.Message) error {
 
 	b, err := io.ReadAll(s.r.Body)
 	if err != nil {
-		return err
+		return status.Errorf(codes.Internal, "failed to read request body: %s", err)
 	}
 
 	s.read = true
 
-	return s.reqtc.Transcode(b, msg)
+	return responseTranscodingError(s.reqtc.Transcode(b, msg))
 }
