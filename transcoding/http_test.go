@@ -15,7 +15,9 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/internal/bridgetest"
 	"github.com/renbou/grpcbridge/internal/bridgetest/testpb"
+	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
@@ -518,10 +520,36 @@ func Test_StandardTranscoder_CustomResponseMarshaler(t *testing.T) {
 	}
 
 	if reqTranscoder.ContentType() != contentTypeJSON {
-		t.Fatalf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(), contentTypeJSON)
+		t.Errorf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(), contentTypeJSON)
 	}
 
 	if respTranscoder.ContentType() != contentTypePNG {
-		t.Fatalf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(), contentTypePNG)
+		t.Errorf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(), contentTypePNG)
+	}
+}
+
+func Test_StandardTranscoder_TranscodeResponseStatus(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	transcoder := NewStandardTranscoder(StandardTranscoderOpts{})
+	response := responseValues{responsePath: "bool_value"}
+	_, respTranscoder := mustBind(t, transcoder, response.prepare())
+
+	// Act
+	data, transcodeErr := respTranscoder.Transcode(&spb.Status{Code: int32(codes.NotFound), Message: "not found"})
+
+	// Assert
+	if transcodeErr != nil {
+		t.Fatalf("ResponseTranscoder.Transcode(google.rpc.Status{NotFound}) returned non-nil error = %q", transcodeErr)
+	}
+
+	var statuspb spb.Status
+	if err := json.Unmarshal(data, &statuspb); err != nil {
+		t.Fatalf("ResponseTranscoder.Transcode(google.rpc.Status{NotFound}) returned invalid data, failed to unmarshal: %q", err)
+	}
+
+	if cmpErr := bridgetest.StatusIs(status.ErrorProto(&statuspb), status.New(codes.NotFound, "not found")); cmpErr != nil {
+		t.Fatalf("ResponseTranscoder.Transcode(google.rpc.Status{NotFound}) returned unexpected marshaled status: %q", cmpErr)
 	}
 }

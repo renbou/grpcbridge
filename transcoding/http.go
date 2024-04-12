@@ -276,6 +276,14 @@ func (t *standardResponseTranscoder) Transcode(protomsg proto.Message) ([]byte, 
 }
 
 func (t *standardResponseTranscoder) transcodeFunc(protomsg proto.Message, f func(protoreflect.Message, protoreflect.FieldDescriptor) error) error {
+	if protomsg.ProtoReflect().Descriptor().FullName() == "google.rpc.Status" {
+		if err := f(protomsg.ProtoReflect(), nil); err != nil {
+			return fmt.Errorf("marshaling response status: %w", err)
+		}
+
+		return nil
+	}
+
 	msg, fd, err := traverseFieldPath(protomsg.ProtoReflect(), t.req.Binding.ResponseBodyPath)
 	if err != nil {
 		return fmt.Errorf("response body path %q: %w", t.req.Binding.ResponseBodyPath, err)

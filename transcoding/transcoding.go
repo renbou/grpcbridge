@@ -91,6 +91,9 @@ type HTTPRequestTranscoder interface {
 }
 
 // HTTPResponseTranscoder is responsible for transcoding response messages bound to a specific HTTP request.
+// Transcode should support not only the response message specified in the HTTPRequest from which this transcoder was bound,
+// but also gRPC [*google.golang.org/genproto/googleapis/rpc/status.Status] messages,
+// which are marshaled to return complete gRPC status codes along with the message and details.
 // Errors returned by Transcode should be gRPC status errors to differentiate between internal errors and invalid requests,
 // and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
 type HTTPResponseTranscoder interface {
