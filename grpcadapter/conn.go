@@ -3,6 +3,7 @@ package grpcadapter
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -10,69 +11,43 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type AdaptedClientConn struct {
-	mu sync.Mutex
-
-	// dialed & closed synchronize the dialing/closing procedures which happen in different goroutines.
-	dialed bool
-	closed bool
-
-	// dialedCh is closed to notify clients that the connection has been dialed,
-	// and provides an additional synchronization mechanism where the mutex isn't needed.
-	dialedCh chan struct{}
-
+type adaptedClientState struct {
 	conn *grpc.ClientConn
 	err  error
 }
 
-// AdaptedDial returns an AdaptedClientConn that will be ready when the dial, which is run in a separate goroutine, completes.
-// Using the AdaptedClientConn prior to the dial completing is valid, and the made calls will wait for the dial to complete, if possible.
-func AdaptedDial(dial func() (*grpc.ClientConn, error)) *AdaptedClientConn {
-	cc := &AdaptedClientConn{
-		err:      status.Error(codes.Unavailable, "grpcbridge: connection not yet dialed"),
-		dialedCh: make(chan struct{}),
-	}
-
-	go func() {
-		conn, err := dial()
-
-		// critical section to be observed in close()
-		cc.mu.Lock()
-		defer cc.mu.Unlock()
-
-		cc.conn = conn
-		cc.err = err
-
-		// closed before dial() has completed, need to close the connection now
-		if cc.closed {
-			cc.applyClose()
-		}
-
-		cc.dialed = true
-		close(cc.dialedCh)
-	}()
-
-	return cc
+type AdaptedClientConn struct {
+	state atomic.Pointer[adaptedClientState]
 }
 
-// Close requests a close of this connection.
-// If the connection has not yet been dialed, it will be closed when the dial completes.
-func (cc *AdaptedClientConn) Close() {
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
+// AdaptClient wraps an existing gRPC client with an adapter implementing [ClientConn].
+// The returned client is instantly ready to be used, and will be valid until [*AdaptedClientConn.Close] is called,
+// after which any stream initiations via the client will return an error and the underlying gRPC client will be closed, too.
+func AdaptClient(conn *grpc.ClientConn) *AdaptedClientConn {
+	state := &adaptedClientState{
+		conn: conn,
+	}
 
-	// avoid errors when getting called twice
-	if cc.closed {
+	adapted := new(AdaptedClientConn)
+	adapted.state.Store(state)
+
+	return adapted
+}
+
+// Close marks this connection as closed and closes the underlying gRPC client.
+// Calling Close concurrently won't cause issues, but why would you want to even do it...
+func (cc *AdaptedClientConn) Close() {
+	state := cc.state.Load()
+	if state.conn == nil {
 		return
 	}
 
-	cc.closed = true
+	_ = state.conn.Close() // doesn't return any meaningful errors
 
-	// if this is true, then close() has been called AFTER dial() completed, connection is properly closed;
-	// otherwise, close() has been called before dial() completed, and the connection will be closed in dial().
-	if cc.dialed {
-		cc.applyClose()
-	}
+	cc.state.Store(&adaptedClientState{
+		conn: nil,
+		err:  status.Error(codes.Unavailable, "grpcbridge: connection closed"),
+	})
 }
 
 func (cc *AdaptedClientConn) Stream(ctx context.Context, method string) (ClientStream, error) {
@@ -101,54 +76,39 @@ func (cc *AdaptedClientConn) Stream(ctx context.Context, method string) (ClientS
 }
 
 func (cc *AdaptedClientConn) getConn(ctx context.Context) (*grpc.ClientConn, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctxRPCErr(ctx.Err())
-	case <-cc.dialedCh:
+	state := cc.state.Load()
+
+	if state.conn != nil {
+		// Try waiting for the connection to recover if it has failed.
+		// This helps to avoid returning errors to client requests and gRPC reflection resolver
+		// when the service has just started or when some random error occurs.
+		// After waiting still try to use the connection to at least get a readable error describing the failure.
+		cc.waitForReady(ctx, state.conn)
 	}
 
-	if cc.conn == nil {
-		return nil, cc.err
-	}
-
-	// Try waiting for the connection to recover if it has failed.
-	// This helps to avoid returning errors to client requests and gRPC reflection resolver
-	// when the service has just started or when some random error occurs.
-	// After waiting still try to use the connection to at least get a readable error describing the failure.
-	cc.waitForReady(ctx)
-
-	return cc.conn, cc.err
+	return state.conn, state.err
 }
 
-func (cc *AdaptedClientConn) waitForReady(ctx context.Context) {
+func (*AdaptedClientConn) waitForReady(ctx context.Context, conn *grpc.ClientConn) {
 	// No point in wasting all the available time.
 	// TODO(renbou): Add a "ConnectTimeout" setting to AdaptedClientConn and pool to have a default here when no timeout is set.
 	ctx, cancel := ctxWithHalvedDeadline(ctx)
 	defer cancel()
 
-	state := cc.conn.GetState()
+	connState := conn.GetState()
 
 	// State will be IDLE first if something happened to the connection.
 	// gRPC won't attempt a reconnect unless something happens,
 	// like this manual call telling gRPC "hey, we will need a connection here!".
-	if state == connectivity.Idle {
-		cc.conn.Connect()
+	if connState == connectivity.Idle {
+		conn.Connect()
 	}
 
-	for state != connectivity.Ready {
-		if !cc.conn.WaitForStateChange(ctx, state) {
+	for connState != connectivity.Ready {
+		if !conn.WaitForStateChange(ctx, connState) {
 			return
 		}
 
-		state = cc.conn.GetState()
+		connState = conn.GetState()
 	}
-}
-
-// close needs to be called while cc.mu is held.
-func (cc *AdaptedClientConn) applyClose() {
-	_ = cc.conn.Close() // doesn't return any meaningful errors
-
-	// Clear conn and update error to avoid accidental use of connection after it has been closed.
-	cc.conn = nil
-	cc.err = status.Error(codes.Unavailable, "grpcbridge: connection closed")
 }

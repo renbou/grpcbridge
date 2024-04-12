@@ -1,73 +1,91 @@
 package grpcadapter
 
 import (
-	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 
 	"google.golang.org/grpc"
 )
 
-type DialedPool struct {
-	dialer func(context.Context, string) (*grpc.ClientConn, error)
-	conns  sync.Map // string -> *DialedPoolController
+type AdaptedClientPoolOpts struct {
+	// NewClientFunc can be used to specify an alternative connection constructor to be used instead of [grpc.NewClient].
+	NewClientFunc func(target string, opts ...grpc.DialOption) (*grpc.ClientConn, error)
+
+	// DefaultOpts specify the default options to be used when creating a new client, by default no opts are used.
+	DefaultOpts []grpc.DialOption
 }
 
-func NewDialedPool(dialer func(context.Context, string) (*grpc.ClientConn, error)) *DialedPool {
-	return &DialedPool{dialer: dialer}
+func (o AdaptedClientPoolOpts) withDefaults() AdaptedClientPoolOpts {
+	if o.NewClientFunc == nil {
+		o.NewClientFunc = grpc.NewClient
+	}
+
+	return o
 }
 
-// Dial creates a new [*AdaptedClientConn] and adds it to the pool without waiting for its dial to go through.
-// It returns a [*DialedPoolController] which can be used to close the connection and remove it from the pool.
+type AdaptedClientPool struct {
+	opts  AdaptedClientPoolOpts
+	conns sync.Map // string -> *DialedPoolController
+}
+
+func NewAdaptedClientPool(opts AdaptedClientPoolOpts) *AdaptedClientPool {
+	return &AdaptedClientPool{opts: opts.withDefaults()}
+}
+
+// New creates a new [*AdaptedClientConn] using [grpc.NewClient] or the NewClientFunc specified in [AdaptedClientPoolOpts]
+// using the merged set of default options and the options passed to New.
+// It returns a [*AdaptedClientPoolController] which can be used to close the connection and remove it from the pool.
 //
-// It is an error to try Dial()ing the same targetName multiple times on a single DialedPool instance,
-// the previous [*DialedPoolController] must be explicitly used to close the connection before dialing a new one.
+// It is an error to call New() with the same targetName multiple times on a single DialedPool instance,
+// the previous [*AdaptedClientPoolController] must be explicitly used to close the connection before dialing a new one.
 // Instead of trying to synchronize such procedures, however, it's better to have a properly defined lifecycle
 // for each possible target, with clear logic about when it gets added or removed to/from all the components of a bridge.
-func (p *DialedPool) Dial(ctx context.Context, targetName, dialTarget string) (*DialedPoolController, error) {
-	controllerAny, loaded := p.conns.LoadOrStore(targetName, new(DialedPoolController))
+func (p *AdaptedClientPool) New(targetName, dialTarget string, opts ...grpc.DialOption) (*AdaptedClientPoolController, error) {
+	controllerAny, loaded := p.conns.LoadOrStore(targetName, new(AdaptedClientPoolController))
 	if loaded {
 		return nil, ErrAlreadyDialed
 	}
 
-	conn := AdaptedDial(func() (*grpc.ClientConn, error) {
-		return p.dialer(ctx, dialTarget)
-	})
+	conn, err := p.opts.NewClientFunc(dialTarget, slices.Concat(p.opts.DefaultOpts, opts)...)
+	if err != nil {
+		return nil, err
+	}
 
-	controller := controllerAny.(*DialedPoolController)
+	controller := controllerAny.(*AdaptedClientPoolController)
 	controller.pool = p
 	controller.target = targetName
-	controller.conn = conn
+	controller.client = AdaptClient(conn)
 
 	return controller, nil
 }
 
-func (p *DialedPool) Get(target string) (ClientConn, bool) {
+func (p *AdaptedClientPool) Get(target string) (ClientConn, bool) {
 	controller, ok := p.conns.Load(target)
 	if !ok {
 		return nil, false
 	}
 
-	return controller.(*DialedPoolController).conn, true
+	return controller.(*AdaptedClientPoolController).client, true
 }
 
-// DialedPoolController wraps an AdaptedClientConn created using a DialedPool,
+// AdaptedClientPoolController wraps an AdaptedClientConn created using a DialedPool,
 // providing methods to control the AdaptedClientConn's own and pool lifecycle.
-type DialedPoolController struct {
-	pool *DialedPool
+type AdaptedClientPoolController struct {
+	pool *AdaptedClientPool
 
 	target string
-	conn   ClientConn
+	client ClientConn
 	closed atomic.Bool
 }
 
 // Close removes this connection from the pool and closes it.
 // Calling close multiple times or concurrently will intentionally result in a panic to avoid bugs.
-func (pw *DialedPoolController) Close() {
+func (pw *AdaptedClientPoolController) Close() {
 	if pw.closed.Swap(true) {
 		panic("grpcbridge: pooled client conn closed multiple times")
 	}
 
 	pw.pool.conns.Delete(pw.target)
-	pw.conn.Close()
+	pw.client.Close()
 }

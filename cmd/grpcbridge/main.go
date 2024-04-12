@@ -70,8 +70,10 @@ func mainImpl() error {
 		return err
 	}
 
-	connPool := grpcadapter.NewDialedPool(func(ctx context.Context, s string) (*grpc.ClientConn, error) {
-		return grpc.DialContext(ctx, s, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	connPool := grpcadapter.NewAdaptedClientPool(grpcadapter.AdaptedClientPoolOpts{
+		DefaultOpts: []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
 	})
 
 	resolverBuilder := reflection.NewResolverBuilder(connPool, reflection.ResolverOpts{
@@ -87,7 +89,7 @@ func mainImpl() error {
 	httpBridge := webbridge.NewHTTPTranscodedBridge(httpRouter, transcoder)
 
 	for _, cfg := range cfg.Services {
-		_, _ = connPool.Dial(context.Background(), cfg.Name, cfg.Target)
+		_, _ = connPool.New(cfg.Name, cfg.Target)
 
 		lw := &loggingWatcher{logger: logger}
 		gw, err := grpcRouter.Watch(cfg.Name)

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/renbou/grpcbridge/grpcadapter"
 	"google.golang.org/grpc"
@@ -14,9 +13,12 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-const TestTarget = "bridgetest"
+const (
+	TestTargetName = "bridgetest"
+	TestDialTarget = "passthrough:///bridgetest"
+)
 
-func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Server, *grpcadapter.DialedPool, grpcadapter.ClientConn) {
+func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Server, *grpcadapter.AdaptedClientPool, grpcadapter.ClientConn) {
 	// Relatively big buffer to allow all test goroutines to communicate without blocking.
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
@@ -37,23 +39,19 @@ func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Se
 		}
 	})
 
-	pool := grpcadapter.NewDialedPool(func(ctx context.Context, s string) (*grpc.ClientConn, error) {
-		return grpc.DialContext(ctx, s,
+	pool := grpcadapter.NewAdaptedClientPool(grpcadapter.AdaptedClientPoolOpts{
+		DefaultOpts: []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
 				return listener.Dial()
 			}),
-		)
+		},
 	})
 
-	// Timeout just to avoid freezing tests.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	controller, _ := pool.Dial(ctx, TestTarget, "bufconn")
+	controller, _ := pool.New(TestTargetName, TestDialTarget)
 	tb.Cleanup(controller.Close) // intentionally added after listener.Close cleanup for the connection to be closed before the listener
 
-	conn, _ := pool.Get(TestTarget)
+	conn, _ := pool.Get(TestTargetName)
 
 	return server, pool, conn
 }

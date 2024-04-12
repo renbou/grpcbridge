@@ -190,7 +190,7 @@ func Test_Resolver(t *testing.T) {
 	// Act
 	// Build and immediatelly close the resolver.
 	// watch() will execute once and report the results,
-	resolver := builder.Build(bridgetest.TestTarget, watcher)
+	resolver := builder.Build(bridgetest.TestTargetName, watcher)
 	watcher.wait()
 	resolver.Close()
 
