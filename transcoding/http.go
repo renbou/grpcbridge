@@ -39,14 +39,23 @@ var (
 // StandardTranscoderOpts define all the optional settings which can be set for [StandardTranscoder].
 type StandardTranscoderOpts struct {
 	// Marshalers is the list of marshalers to use for transcoding.
-	// If not set, the default marshaler list contains a [JSONMarshaler] with EmitDefaultValues and DiscardUnknown set to true.
+	// If not set, the default marshaler list contains a [DefaultJSONMarshaler].
 	Marshalers []Marshaler
+
+	// Marshaler to use if the request does not specify a Content-Type header.
+	// If not set, the default marshaler will be [DefaultJSONMarshaler].
+	DefaultMarshaler Marshaler
 }
 
 func (o StandardTranscoderOpts) withDefaults() StandardTranscoderOpts {
 	if o.Marshalers == nil {
 		o.Marshalers = []Marshaler{DefaultJSONMarshaler}
 	}
+
+	if o.DefaultMarshaler == nil {
+		o.DefaultMarshaler = DefaultJSONMarshaler
+	}
+
 	return o
 }
 
@@ -64,7 +73,8 @@ func (o StandardTranscoderOpts) withDefaults() StandardTranscoderOpts {
 //
 // [google/api/http.proto]: https://github.com/googleapis/googleapis/blob/master/google/api/http.proto
 type StandardTranscoder struct {
-	mimeMarshalers map[string]Marshaler
+	defaultMarshaler Marshaler
+	mimeMarshalers   map[string]Marshaler
 }
 
 // NewStandardTranscoder initializes a new [StandardTranscoder] with the specified options, which be used by it during Bind.
@@ -78,13 +88,17 @@ func NewStandardTranscoder(opts StandardTranscoderOpts) *StandardTranscoder {
 		}
 	}
 
-	return &StandardTranscoder{mimeMarshalers: mimeMarshalers}
+	return &StandardTranscoder{
+		defaultMarshaler: opts.DefaultMarshaler,
+		mimeMarshalers:   mimeMarshalers,
+	}
 }
 
 // Bind constructs request and response message transcoders bound to a single specific [HTTPRequest],
 // and returns a status error of StatusUnsupportedMediaType if no marshalers were found for the specified Content-Type and Accept headers.
-// At the minimum, the request must specify a Content-Type header, which will also be used as a default for the
+// If the request specified a Content-Type header, it will also be used as a default for the
 // response message transcoder, unless a different MIME type is specified in the Accept header.
+// However, if the request specified no Content-type, a default marshaler specified in [StandardTranscoderOpts] will be used.
 // The returned transcoders' ContentType methods will return the value with which they have been matched.
 //
 // If a chosen marshaler supports streaming via [StreamMarshaler], the according transcoder will also
@@ -113,7 +127,13 @@ func (t *StandardTranscoder) Bind(req HTTPRequest) (HTTPRequestTranscoder, HTTPR
 }
 
 func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, string, error) {
-	for _, ct := range req.RawRequest.Header[contentTypeHeader] {
+	ctHeader := req.RawRequest.Header[contentTypeHeader]
+
+	if len(ctHeader) == 0 {
+		return t.defaultMarshaler, t.defaultMarshaler.ContentTypes()[0], nil
+	}
+
+	for _, ct := range ctHeader {
 		mt, _, err := mime.ParseMediaType(ct)
 		if err != nil {
 			continue

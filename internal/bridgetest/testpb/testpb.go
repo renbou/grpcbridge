@@ -3,6 +3,7 @@ package testpb
 import (
 	"fmt"
 
+	"github.com/renbou/grpcbridge/bridgedesc"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -15,6 +16,7 @@ var (
 	TestServiceFDs           *descriptorpb.FileDescriptorSet
 	TestServiceFileResolver  *protoregistry.Files
 	TestServiceTypesResolver *dynamicpb.Types
+	TestServiceDesc          *bridgedesc.Target
 )
 
 func init() {
@@ -22,6 +24,12 @@ func init() {
 	TestServiceFDs = fileDescriptors(File_testsvc_proto)
 	TestServiceFileResolver = fileResolver(File_testsvc_proto.Path(), TestServiceFDs)
 	TestServiceTypesResolver = dynamicpb.NewTypes(TestServiceFileResolver)
+	TestServiceDesc = bridgedesc.ParseTarget(
+		"bridgetest",
+		TestServiceFileResolver,
+		TestServiceTypesResolver,
+		[]protoreflect.FullName{"grpcbridge.internal.bridgetest.testpb.TestService"},
+	)
 }
 
 func fileDescriptors(desc protoreflect.FileDescriptor) *descriptorpb.FileDescriptorSet {

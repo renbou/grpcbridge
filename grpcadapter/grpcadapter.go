@@ -43,7 +43,7 @@ type ForwardS2C struct {
 	Method   *bridgedesc.Method
 }
 
-// ForwardServerToClient forwards an incoming ServerStream to an outgoing ClientStream via 2 concurrent goroutines.
+// ForwardServerToClient forwards an incoming ServerStream to an outgoing ClientStream.
 // It either returns an error when the forwarding process fails, or nil when the outgoing stream returns an io.EOF on Recv.
 func ForwardServerToClient(ctx context.Context, params ForwardS2C) error {
 	i2oErrCh := make(chan forwardError, 1)

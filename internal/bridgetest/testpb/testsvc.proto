@@ -10,11 +10,25 @@ option go_package = "github.com/renbou/grpcbridge/internal/bridgetest/testpb";
 service TestService {
   rpc UnaryUnbound(Scalars) returns (Scalars);
 
+  rpc UnaryBound(Scalars) returns (Combined) {
+    option (google.api.http) = {
+      post: "/service/unary/{string_value}/{fixed64_value}"
+      body: "bytes_value"
+    };
+  }
+
   rpc UnaryCombined(Combined) returns (Combined) {
     option (google.api.http) = {
       post: "/service/combined/{scalars.bool_value}/{scalars.string_value}"
       body: "non_scalars"
       response_body: "non_scalars"
+    };
+  }
+
+  rpc BadResponsePath(Scalars) returns (Combined) {
+    option (google.api.http) = {
+      post: "/service/bad-response-path"
+      response_body: "not_a_field"
     };
   }
 }

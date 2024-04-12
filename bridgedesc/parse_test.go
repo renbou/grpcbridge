@@ -1,4 +1,5 @@
-package bridgedesc
+// Package bridgedesc_test contains tests for the bridgedesc package to avoid loop cycles.
+package bridgedesc_test
 
 import (
 	"slices"
@@ -6,36 +7,64 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/internal/bridgetest/testpb"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-var testSvcDesc = &Target{
+var testSvcDesc = &bridgedesc.Target{
 	Name:         "testpb",
 	FileResolver: testpb.TestServiceFileResolver,
 	TypeResolver: testpb.TestServiceTypesResolver,
-	Services: []Service{
+	Services: []bridgedesc.Service{
 		{
 			Name: protoreflect.FullName(testpb.TestService_ServiceDesc.ServiceName),
-			Methods: []Method{
+			Methods: []bridgedesc.Method{
 				{
 					RPCName:         testpb.TestService_UnaryUnbound_FullMethodName,
-					Input:           ConcreteMessage[testpb.Scalars](),
-					Output:          ConcreteMessage[testpb.Scalars](),
+					Input:           bridgedesc.ConcreteMessage[testpb.Scalars](),
+					Output:          bridgedesc.ConcreteMessage[testpb.Scalars](),
 					ClientStreaming: false,
 					ServerStreaming: false,
 				},
 				{
-					RPCName:         testpb.TestService_UnaryCombined_FullMethodName,
-					Input:           ConcreteMessage[testpb.Combined](),
-					Output:          ConcreteMessage[testpb.Combined](),
+					RPCName:         testpb.TestService_UnaryBound_FullMethodName,
+					Input:           bridgedesc.ConcreteMessage[testpb.Scalars](),
+					Output:          bridgedesc.ConcreteMessage[testpb.Combined](),
 					ClientStreaming: false,
 					ServerStreaming: false,
-					Bindings: []Binding{{
+					Bindings: []bridgedesc.Binding{
+						{
+							HTTPMethod:       "POST",
+							Pattern:          "/service/unary/{string_value}/{fixed64_value}",
+							RequestBodyPath:  "bytes_value",
+							ResponseBodyPath: "",
+						},
+					},
+				},
+				{
+					RPCName:         testpb.TestService_UnaryCombined_FullMethodName,
+					Input:           bridgedesc.ConcreteMessage[testpb.Combined](),
+					Output:          bridgedesc.ConcreteMessage[testpb.Combined](),
+					ClientStreaming: false,
+					ServerStreaming: false,
+					Bindings: []bridgedesc.Binding{{
 						HTTPMethod:       "POST",
 						Pattern:          "/service/combined/{scalars.bool_value}/{scalars.string_value}",
 						RequestBodyPath:  "non_scalars",
 						ResponseBodyPath: "non_scalars",
+					}},
+				},
+				{
+					RPCName:         testpb.TestService_BadResponsePath_FullMethodName,
+					Input:           bridgedesc.ConcreteMessage[testpb.Scalars](),
+					Output:          bridgedesc.ConcreteMessage[testpb.Combined](),
+					ClientStreaming: false,
+					ServerStreaming: false,
+					Bindings: []bridgedesc.Binding{{
+						HTTPMethod:       "POST",
+						Pattern:          "/service/bad-response-path",
+						ResponseBodyPath: "not_a_field",
 					}},
 				},
 			},
@@ -45,11 +74,11 @@ var testSvcDesc = &Target{
 
 func bridgedescOpts() cmp.Option {
 	return cmp.Options{
-		cmp.Transformer("MessagesToNames", func(message Message) protoreflect.FullName {
+		cmp.Transformer("MessagesToNames", func(message bridgedesc.Message) protoreflect.FullName {
 			return message.New().ProtoReflect().Descriptor().FullName()
 		}),
-		cmpopts.IgnoreInterfaces(struct{ FileResolver }{}),
-		cmpopts.IgnoreInterfaces(struct{ TypeResolver }{}),
+		cmpopts.IgnoreInterfaces(struct{ bridgedesc.FileResolver }{}),
+		cmpopts.IgnoreInterfaces(struct{ bridgedesc.TypeResolver }{}),
 	}
 }
 
@@ -60,7 +89,7 @@ func Test_ParseFileDescriptors_Ok(t *testing.T) {
 	tests := []struct {
 		name       string
 		services   []string
-		wantTarget *Target
+		wantTarget *bridgedesc.Target
 	}{
 		{
 			name:       "all test services",
@@ -70,12 +99,12 @@ func Test_ParseFileDescriptors_Ok(t *testing.T) {
 		{
 			name:       "unknown service missing",
 			services:   []string{testpb.TestService_ServiceDesc.ServiceName, "unknown"},
-			wantTarget: &Target{Name: "testpb", Services: append(slices.Clone(testSvcDesc.Services), Service{Name: "unknown"})},
+			wantTarget: &bridgedesc.Target{Name: "testpb", Services: append(slices.Clone(testSvcDesc.Services), bridgedesc.Service{Name: "unknown"})},
 		},
 		{
 			name:       "unrequested service ignored",
 			services:   []string{},
-			wantTarget: &Target{Name: "testpb", Services: make([]Service, 0)},
+			wantTarget: &bridgedesc.Target{Name: "testpb", Services: make([]bridgedesc.Service, 0)},
 		},
 	}
 
@@ -90,7 +119,7 @@ func Test_ParseFileDescriptors_Ok(t *testing.T) {
 			}
 
 			// Act
-			result := ParseTarget("testpb", testpb.TestServiceFileResolver, testpb.TestServiceTypesResolver, serviceNames)
+			result := bridgedesc.ParseTarget("testpb", testpb.TestServiceFileResolver, testpb.TestServiceTypesResolver, serviceNames)
 
 			// Assert
 			if diff := cmp.Diff(tt.wantTarget, result, bridgedescOpts()); diff != "" {

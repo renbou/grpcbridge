@@ -86,7 +86,7 @@ func mainImpl() error {
 	transcoder := transcoding.NewStandardTranscoder(transcoding.StandardTranscoderOpts{})
 
 	grpcProxy := grpcbridge.NewGRPCProxy(grpcRouter, grpcbridge.GPRCProxyOpts{Logger: logger})
-	httpBridge := webbridge.NewHTTPTranscodedBridge(httpRouter, transcoder)
+	httpBridge := webbridge.NewHTTPTranscodedBridge(httpRouter, transcoder, webbridge.HTTPTranscodedBridgeOpts{})
 
 	for _, cfg := range cfg.Services {
 		_, _ = connPool.New(cfg.Name, cfg.Target)
