@@ -28,6 +28,17 @@ var (
 	_ StreamMarshaler = (*JSONMarshaler)(nil)
 )
 
+// DefaultJSONMarshaler is used as one of the default marshalers in StandardTranscoderOpts,
+// and can be used when it is needed to customize the list of marshalers without affecting the default ones.
+// It uses the EmitDefaultValues and DiscardUnknown settings, replicating the default behaviour of gRPC-Gateway.
+// This means that zero-values are included in the marshaled output, and unknown fields and enum values are discarded instead of returning an error.
+var DefaultJSONMarshaler = &JSONMarshaler{
+	// Settings replicate those used by default in gRPC-Gateway, and they make sense.
+	// https://github.com/grpc-ecosystem/grpc-gateway/blob/882fa790dbf0d15a5c422190181199a2ea1f7aab/runtime/marshaler_registry.go#L20
+	MarshalOptions:   protojson.MarshalOptions{EmitDefaultValues: true},
+	UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
+}
+
 // JSONMarshaler implements marshaling and unmarshaling of arbitrary protobuf message fields with custom type resolving,
 // meant to be used for transcoding request and response messages from different targets.
 // Encoding is implemented as specified in the [Proto3 JSON Mapping].

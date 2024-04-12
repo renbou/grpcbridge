@@ -13,7 +13,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/renbou/grpcbridge/bridgedesc"
+	"github.com/renbou/grpcbridge/internal/bridgetest"
 	"github.com/renbou/grpcbridge/internal/bridgetest/testpb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
@@ -455,5 +457,71 @@ func Test_StandardTranscoder_ResponseStream(t *testing.T) {
 	// Assert
 	if diff := cmp.Diff(wantData, data); diff != "" {
 		t.Errorf("ResponseStream.Transcode() returned data differing from expected (-want+got):\n%s", diff)
+	}
+}
+
+// Test_StandardTranscoder_PickMarshalerFail tests that StandardMarshaler properly handles requests with unsupported content types.
+func Test_StandardTranscoder_PickMarshalerFail(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	transcoder := NewStandardTranscoder(StandardTranscoderOpts{})
+
+	// Act
+	_, _, err := transcoder.Bind(HTTPRequest{RawRequest: &http.Request{
+		Header: http.Header{"Content-Type": []string{"application\x00", "image/png"}},
+	}})
+
+	// Assert
+	if err == nil {
+		t.Errorf("Bind() returned nil error for request with invalid and unsupported content type")
+	} else if cmpErr := bridgetest.StatusCodeIs(err, codes.InvalidArgument); cmpErr != nil {
+		t.Errorf("Bind() returned error with unexpected gRPC status: %q", err)
+	} else if httpStatus, ok := err.(interface{ HTTPStatus() int }); !ok {
+		t.Errorf("Bind() returned error not implementing HTTPStatus()")
+	} else if gotStatus := httpStatus.HTTPStatus(); gotStatus != http.StatusUnsupportedMediaType {
+		t.Errorf("Bind() returned error with HTTP status = %q, want %q", gotStatus, http.StatusUnsupportedMediaType)
+	}
+}
+
+type fakeMarshaler struct {
+	JSONMarshaler
+	ct []string
+}
+
+func (m *fakeMarshaler) ContentTypes() []string {
+	return m.ct
+}
+
+// Test_StandardTranscoder_CustomResponseMarshaler tests that StandardTranscoder supports returning different marshalers for the request and response.
+func Test_StandardTranscoder_CustomResponseMarshaler(t *testing.T) {
+	t.Parallel()
+
+	const contentTypePNG = "image/png"
+
+	// Arrange
+	transcoder := NewStandardTranscoder(StandardTranscoderOpts{
+		Marshalers: []Marshaler{DefaultJSONMarshaler, &fakeMarshaler{ct: []string{contentTypePNG}}},
+	})
+
+	// Act
+	reqTranscoder, respTranscoder, bindErr := transcoder.Bind(HTTPRequest{RawRequest: &http.Request{
+		Header: http.Header{
+			"Content-Type": []string{"application/grpc", contentTypeJSON},
+			"Accept":       []string{"text/html", contentTypePNG},
+		},
+	}})
+
+	// Assert
+	if bindErr != nil {
+		t.Fatalf("Bind() returned error = %q, expected Bind to succeed and return transcoders", bindErr)
+	}
+
+	if reqTranscoder.ContentType() != contentTypeJSON {
+		t.Fatalf("RequestTranscoder.ContentType() = %q, want %q", reqTranscoder.ContentType(), contentTypeJSON)
+	}
+
+	if respTranscoder.ContentType() != contentTypePNG {
+		t.Fatalf("ResponseTranscoder.ContentType() = %q, want %q", respTranscoder.ContentType(), contentTypePNG)
 	}
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/renbou/grpcbridge/internal/httperr"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -45,14 +44,7 @@ type StandardTranscoderOpts struct {
 
 func (o StandardTranscoderOpts) withDefaults() StandardTranscoderOpts {
 	if o.Marshalers == nil {
-		o.Marshalers = []Marshaler{
-			&JSONMarshaler{
-				// Settings replicate those used by default in gRPC-Gateway, and they make sense.
-				// https://github.com/grpc-ecosystem/grpc-gateway/blob/882fa790dbf0d15a5c422190181199a2ea1f7aab/runtime/marshaler_registry.go#L20
-				MarshalOptions:   protojson.MarshalOptions{EmitDefaultValues: true},
-				UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
-			},
-		}
+		o.Marshalers = []Marshaler{DefaultJSONMarshaler}
 	}
 	return o
 }
