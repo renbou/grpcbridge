@@ -12,10 +12,6 @@ import (
 
 var _ grpc.StreamHandler = (*GRPCProxy)(nil).StreamHandler
 
-type GRPCRouter interface {
-	RouteGRPC(context.Context) (grpcadapter.ClientConn, routing.GRPCRoute, error)
-}
-
 type GPRCProxyOpts struct {
 	Logger bridgelog.Logger
 }
@@ -34,10 +30,10 @@ var defaultGRPCProxyOpts = &GPRCProxyOpts{
 
 type GRPCProxy struct {
 	logger bridgelog.Logger
-	router GRPCRouter
+	router routing.GRPCRouter
 }
 
-func NewGRPCProxy(router GRPCRouter, opts GPRCProxyOpts) *GRPCProxy {
+func NewGRPCProxy(router routing.GRPCRouter, opts GPRCProxyOpts) *GRPCProxy {
 	opts = opts.withDefaults()
 
 	return &GRPCProxy{

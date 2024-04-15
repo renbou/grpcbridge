@@ -47,10 +47,11 @@ type ResolverOpts struct {
 	// Logs are discarded by default.
 	Logger bridgelog.Logger
 	// 5 minutes by default, 1 second minimum.
-	// A random jitter of +/-10% will be added to the interval to spread out all the polling
+	// A random jitter of ±10% will be added to the interval to spread out all the polling
 	// requests resolvers have to do, avoiding spikes in resource usage.
 	PollInterval time.Duration
-	// If PollManually is true, ResolveNow has to be manually called for polling to happen.
+	// If PollManually is true, the resolver will perform a single initial iteration,
+	// after which ResolveNow has to be manually called for polling to happen.
 	PollManually bool
 	// 10 seconds by default, 1ms minimum.
 	ReqTimeout time.Duration

@@ -20,6 +20,7 @@ import (
 
 // ServiceRouterOpts define all the optional settings which can be set for [ServiceRouter].
 type ServiceRouterOpts struct {
+	// Logs are discarded by default.
 	Logger bridgelog.Logger
 }
 

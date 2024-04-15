@@ -12,12 +12,8 @@ import (
 	"time"
 
 	"github.com/renbou/grpcbridge"
-	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
-	"github.com/renbou/grpcbridge/grpcadapter"
 	"github.com/renbou/grpcbridge/internal/config"
-	"github.com/renbou/grpcbridge/reflection"
-	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
 	"github.com/renbou/grpcbridge/webbridge"
 	"google.golang.org/grpc"
@@ -29,32 +25,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-type aggregateWatcher struct {
-	watchers []reflection.Watcher
-}
-
-func (aw *aggregateWatcher) UpdateDesc(state *bridgedesc.Target) {
-	for _, w := range aw.watchers {
-		w.UpdateDesc(state)
-	}
-}
-
-func (aw *aggregateWatcher) ReportError(err error) {
-	for _, w := range aw.watchers {
-		w.ReportError(err)
-	}
-}
-
-type loggingWatcher struct {
-	logger bridgelog.Logger
-}
-
-func (lw *loggingWatcher) UpdateDesc(desc *bridgedesc.Target) {
-	lw.logger.Info("Target description updated", "state", desc)
-}
-
-func (lw *loggingWatcher) ReportError(err error) {}
 
 func mainImpl() error {
 	logger := bridgelog.WrapPlainLogger(slog.New(slog.NewJSONHandler(
@@ -70,41 +40,22 @@ func mainImpl() error {
 		return err
 	}
 
-	connPool := grpcadapter.NewAdaptedClientPool(grpcadapter.AdaptedClientPoolOpts{
-		DefaultOpts: []grpc.DialOption{
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		},
-	})
+	router := grpcbridge.NewReflectionRouter(
+		grpcbridge.WithLogger(logger),
+		grpcbridge.WithDialOpts(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		grpcbridge.WithReflectionPollInterval(time.Second*5),
+	)
 
-	resolverBuilder := reflection.NewResolverBuilder(connPool, reflection.ResolverOpts{
-		Logger:       logger,
-		PollInterval: time.Second * 5,
-	})
-
-	grpcRouter := routing.NewServiceRouter(connPool, routing.ServiceRouterOpts{Logger: logger})
-	httpRouter := routing.NewPatternRouter(connPool, routing.PatternRouterOpts{Logger: logger})
 	transcoder := transcoding.NewStandardTranscoder(transcoding.StandardTranscoderOpts{})
 
-	grpcProxy := grpcbridge.NewGRPCProxy(grpcRouter, grpcbridge.GPRCProxyOpts{Logger: logger})
-	httpBridge := webbridge.NewHTTPTranscodedBridge(httpRouter, transcoder, webbridge.HTTPTranscodedBridgeOpts{})
+	grpcProxy := grpcbridge.NewGRPCProxy(router, grpcbridge.GPRCProxyOpts{Logger: logger})
+	httpBridge := webbridge.NewHTTPTranscodedBridge(router, transcoder, webbridge.HTTPTranscodedBridgeOpts{})
 
 	for _, cfg := range cfg.Services {
-		_, _ = connPool.New(cfg.Name, cfg.Target)
-
-		lw := &loggingWatcher{logger: logger}
-		gw, err := grpcRouter.Watch(cfg.Name)
-		if err != nil {
-			logger.Error("failed to create watcher for grpc router", "error", err)
+		if _, err := router.Add(cfg.Name, cfg.Target); err != nil {
+			logger.Error("Failed to add service", "service", cfg.Name, "error", err)
 			return err
 		}
-
-		hw, err := httpRouter.Watch(cfg.Name)
-		if err != nil {
-			logger.Error("failed to create watcher for http router", "error", err)
-			return err
-		}
-
-		_ = resolverBuilder.Build(cfg.Name, &aggregateWatcher{watchers: []reflection.Watcher{lw, gw, hw}})
 	}
 
 	lis, err := net.Listen("tcp", ":11111")

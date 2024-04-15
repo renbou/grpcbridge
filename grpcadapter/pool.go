@@ -81,6 +81,7 @@ type AdaptedClientPoolController struct {
 
 // Close removes this connection from the pool and closes it.
 // Calling close multiple times or concurrently will intentionally result in a panic to avoid bugs.
+// TODO(renbou): implement graceful connection closure.
 func (pw *AdaptedClientPoolController) Close() {
 	if pw.closed.Swap(true) {
 		panic("grpcbridge: pooled client conn closed multiple times")

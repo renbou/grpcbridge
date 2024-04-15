@@ -16,11 +16,22 @@
 package routing
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
+)
+
+// for docs
+var (
+	_ = grpc.Method
+	_ = metadata.FromIncomingContext
+	_ = peer.FromContext
 )
 
 // GRPCRoute contains the matched route information for a single gRPC request, returned by the RouteGRPC method of the routers.
@@ -52,5 +63,15 @@ var ErrAlreadyWatching = errors.New("target already being watched")
 // Errors returned by RouteHTTP should preferrably be gRPC status errors with HTTP-appropriate codes like NotFound set,
 // but they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
 type HTTPRouter interface {
-	RouteHTTP(r *http.Request) (grpcadapter.ClientConn, HTTPRoute, error)
+	RouteHTTP(*http.Request) (grpcadapter.ClientConn, HTTPRoute, error)
+}
+
+// GRPCRouter is the interface implemented by routers capable of routing gRPC requests.
+// Unlike [HTTPRouter], it doesn't receive a request in its raw form, since no such universal form
+// exists for gRPC in Go, and instead the incoming gRPC request context is passed.
+// The router can use standard gRPC methods such as [grpc.Method], [metadata.FromIncomingContext],
+// and [peer.FromContext] to retrieve the necessary information.
+// Errors returned by RouteGRPC should be gRPC status errors which can be returned to the client as-is.
+type GRPCRouter interface {
+	RouteGRPC(context.Context) (grpcadapter.ClientConn, GRPCRoute, error)
 }
