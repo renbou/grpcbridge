@@ -41,7 +41,10 @@ var DefaultJSONMarshaler = &JSONMarshaler{
 
 // JSONMarshaler implements marshaling and unmarshaling of arbitrary protobuf message fields with custom type resolving,
 // meant to be used for transcoding request and response messages from different targets.
-// Encoding is implemented as specified in the [Proto3 JSON Mapping].
+// Marshaling/Unmarshaling is implemented as specified in the [Proto3 JSON Mapping],
+// and works with a few improvements compared to how it does in gRPC-Gateway:
+//   - It supports all kinds of float/double values as bodies, incluing "NaN", "Infinity", and "-Infinity", like specified in the official JSON Mapping;
+//   - Enum names can be used as bodies, compared to only the numeric representation supported by gRPC-Gateway.
 //
 // [Proto3 JSON Mapping]: https://protobuf.dev/programming-guides/proto3/#json
 type JSONMarshaler struct {

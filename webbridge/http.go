@@ -38,6 +38,9 @@ func (o HTTPTranscodedBridgeOpts) withDefaults() HTTPTranscodedBridgeOpts {
 // More specifically, gRPC status codes will be used to set an HTTP code according to the [Closest HTTP Mapping],
 // with the possibility to override the code by returning an error implementing interface{ HTTPStatus() int }.
 //
+// Unary RPCs follow the Proto3 "all fields are optional" convention, treating completely-empty request messages as valid.
+// This matches with gRPC-Gateway's behaviour.
+//
 // [Closest HTTP Mapping]: https://chromium.googlesource.com/external/github.com/grpc/grpc/+/refs/tags/v1.21.4-pre1/doc/statuscodes.md
 type HTTPTranscodedBridge struct {
 	logger     bridgelog.Logger
@@ -140,6 +143,11 @@ func (s *unaryHTTPStream) Recv(_ context.Context, msg proto.Message) error {
 
 	s.read = true
 	close(s.readCh)
+
+	// Treat completely empty bodies as valid ones.
+	if len(b) == 0 {
+		return nil
+	}
 
 	return requestTranscodingError(s.reqtc.Transcode(b, msg))
 }
