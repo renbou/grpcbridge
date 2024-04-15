@@ -15,8 +15,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-var _ = bridgedesc.Target{}
-
 // RouterOption configures all the components needed to set up grpcbridge routing - gRPC reflection, client pools, logging.
 type RouterOption interface {
 	applyRouter(*routerOptions)

@@ -14,8 +14,6 @@ import (
 	"github.com/renbou/grpcbridge"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/internal/config"
-	"github.com/renbou/grpcbridge/transcoding"
-	"github.com/renbou/grpcbridge/webbridge"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -46,11 +44,6 @@ func mainImpl() error {
 		grpcbridge.WithReflectionPollInterval(time.Second*5),
 	)
 
-	transcoder := transcoding.NewStandardTranscoder(transcoding.StandardTranscoderOpts{})
-
-	grpcProxy := grpcbridge.NewGRPCProxy(router, grpcbridge.GPRCProxyOpts{Logger: logger})
-	httpBridge := webbridge.NewHTTPTranscodedBridge(router, transcoder, webbridge.HTTPTranscodedBridgeOpts{})
-
 	for _, cfg := range cfg.Services {
 		if _, err := router.Add(cfg.Name, cfg.Target); err != nil {
 			logger.Error("Failed to add service", "service", cfg.Name, "error", err)
@@ -64,15 +57,18 @@ func mainImpl() error {
 		return err
 	}
 
-	grpcServer := grpc.NewServer(grpcProxy.AsServerOption())
+	proxy := grpcbridge.NewGRPCProxy(router, grpcbridge.WithLogger(logger))
+	grpcServer := grpc.NewServer(proxy.AsServerOption())
 
 	go func() {
 		_ = grpcServer.Serve(lis)
 	}()
 
+	bridge := grpcbridge.NewWebBridge(router, grpcbridge.WithLogger(logger))
+
 	httpServer := &http.Server{
 		Addr:    ":22222",
-		Handler: httpBridge,
+		Handler: bridge,
 	}
 
 	go func() {

@@ -17,9 +17,9 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func mustHTTPTranscodedBridge(t *testing.T) (*testpb.TestService, *HTTPTranscodedBridge) {
+func mustTranscodedHTTPBridge(t *testing.T) (*testpb.TestService, *TranscodedHTTPBridge) {
 	testsvc, router, transcoder := mustTranscodedTestSvc(t)
-	bridge := NewHTTPTranscodedBridge(router, transcoder, HTTPTranscodedBridgeOpts{})
+	bridge := NewTranscodedHTTPBridge(router, transcoder, TranscodedHTTPBridgeOpts{})
 
 	return testsvc, bridge
 }
@@ -30,8 +30,8 @@ func (br *brokenReader) Read([]byte) (int, error) {
 	return 0, errors.New("broken reader")
 }
 
-// Test_HTTPTranscodedBridge_Unary tests the HTTPTranscodedBridge.ServeHTTP method for a basic unary RPC.
-func Test_HTTPTranscodedBridge_Unary(t *testing.T) {
+// Test_TranscodedHTTPBridge_Unary tests the TranscodedHTTPBridge.ServeHTTP method for a basic unary RPC.
+func Test_TranscodedHTTPBridge_Unary(t *testing.T) {
 	t.Parallel()
 
 	wantRequest := &testpb.Scalars{
@@ -51,7 +51,7 @@ func Test_HTTPTranscodedBridge_Unary(t *testing.T) {
 	}
 
 	// Arrange
-	testsvc, bridge := mustHTTPTranscodedBridge(t)
+	testsvc, bridge := mustTranscodedHTTPBridge(t)
 	testsvc.UnaryBoundResponse = testpb.PrepareResponse(wantResponse, nil)
 
 	recorder := httptest.NewRecorder()
@@ -66,28 +66,28 @@ func Test_HTTPTranscodedBridge_Unary(t *testing.T) {
 	}
 
 	if recorder.Code != http.StatusOK {
-		t.Errorf("HTTPTranscodedBridge.ServeHTTP() returned unexpected non-ok response code = %d, body = %s", recorder.Code, recorder.Body.String())
+		t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned unexpected non-ok response code = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 
 	if contentType := recorder.Result().Header.Get(contentTypeHeader); contentType != ctJson {
-		t.Errorf("HTTPTranscodedBridge.ServeHTTP() returned unexpected content type = %q, want %q", contentType, ctJson)
+		t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned unexpected content type = %q, want %q", contentType, ctJson)
 	}
 
 	gotResponse := new(testpb.Combined)
 	if err := unmarshalJSON(recorder.Body.Bytes(), gotResponse); err != nil {
-		t.Fatalf("HTTPTranscodedBridge.ServeHTTP() returned invalid response, failed to unmarshal: %s", err)
+		t.Fatalf("TranscodedHTTPBridge.ServeHTTP() returned invalid response, failed to unmarshal: %s", err)
 	}
 
 	if diff := cmp.Diff(wantResponse, gotResponse, protocmp.Transform()); diff != "" {
-		t.Errorf("HTTPTranscodedBridge.ServeHTTP() returned response differing from expected (-want+got):\n%s", diff)
+		t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned response differing from expected (-want+got):\n%s", diff)
 	}
 }
 
-// Test_HTTPTranscodedBridge_Errors tests how HTTPTranscodedBridge.ServeHTTP handles and returns errors with various codes and formats.
-func Test_HTTPTranscodedBridge_Errors(t *testing.T) {
+// Test_TranscodedHTTPBridge_Errors tests how TranscodedHTTPBridge.ServeHTTP handles and returns errors with various codes and formats.
+func Test_TranscodedHTTPBridge_Errors(t *testing.T) {
 	t.Parallel()
 
-	_, bridge := mustHTTPTranscodedBridge(t)
+	_, bridge := mustTranscodedHTTPBridge(t)
 
 	tests := []struct {
 		name        string
@@ -158,7 +158,7 @@ func Test_HTTPTranscodedBridge_Errors(t *testing.T) {
 
 			// Assert
 			if recorder.Code != tt.httpCode {
-				t.Errorf("HTTPTranscodedBridge.ServeHTTP() returned response code = %d, want %d", recorder.Code, tt.httpCode)
+				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned response code = %d, want %d", recorder.Code, tt.httpCode)
 			}
 
 			if !tt.isMarshaled {
@@ -167,11 +167,11 @@ func Test_HTTPTranscodedBridge_Errors(t *testing.T) {
 
 			gotStatusPB := new(spb.Status)
 			if err := unmarshalJSON(recorder.Body.Bytes(), gotStatusPB); err != nil {
-				t.Fatalf("HTTPTranscodedBridge.ServeHTTP() returned invalid status response, failed to unmarshal: %s", err)
+				t.Fatalf("TranscodedHTTPBridge.ServeHTTP() returned invalid status response, failed to unmarshal: %s", err)
 			}
 
 			if gotStatus := status.FromProto(gotStatusPB); gotStatus.Code() != tt.statusCode {
-				t.Errorf("HTTPTranscodedBridge.ServeHTTP() returned status code = %s, want %s", gotStatus.Code(), tt.statusCode)
+				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned status code = %s, want %s", gotStatus.Code(), tt.statusCode)
 			}
 		})
 	}

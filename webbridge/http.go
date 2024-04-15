@@ -14,13 +14,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// HTTPTranscodedBridgeOpts define all the optional settings which can be set for [HTTPTranscodedBridge].
-type HTTPTranscodedBridgeOpts struct {
+// TranscodedHTTPBridgeOpts define all the optional settings which can be set for [TranscodedHTTPBridge].
+type TranscodedHTTPBridgeOpts struct {
 	// Logs are discarded by default.
 	Logger bridgelog.Logger
 }
 
-func (o HTTPTranscodedBridgeOpts) withDefaults() HTTPTranscodedBridgeOpts {
+func (o TranscodedHTTPBridgeOpts) withDefaults() TranscodedHTTPBridgeOpts {
 	if o.Logger == nil {
 		o.Logger = bridgelog.Discard()
 	}
@@ -28,12 +28,12 @@ func (o HTTPTranscodedBridgeOpts) withDefaults() HTTPTranscodedBridgeOpts {
 	return o
 }
 
-// HTTPTranscodedBridge is a gRPC bridge which performs transcoding between HTTP and gRPC requests/responses
+// TranscodedHTTPBridge is a gRPC bridge which performs transcoding between HTTP and gRPC requests/responses
 // using the specified transcoder, which isn't an optional argument by default since a single transcoder should be used
 // for the various available bridges for compatibility between them.
 //
 // Currently, only unary RPCs are supported, and the streaming functionality of the transcoder is not used.
-// HTTPTranscodedBridge performs transcoding not only for the request and response messages,
+// TranscodedHTTPBridge performs transcoding not only for the request and response messages,
 // but also for the errors and statuses returned by the router, transcoder, and gRPC connection to which the RPC is bridged.
 // More specifically, gRPC status codes will be used to set an HTTP code according to the [Closest HTTP Mapping],
 // with the possibility to override the code by returning an error implementing interface{ HTTPStatus() int }.
@@ -42,17 +42,17 @@ func (o HTTPTranscodedBridgeOpts) withDefaults() HTTPTranscodedBridgeOpts {
 // This matches with gRPC-Gateway's behaviour.
 //
 // [Closest HTTP Mapping]: https://chromium.googlesource.com/external/github.com/grpc/grpc/+/refs/tags/v1.21.4-pre1/doc/statuscodes.md
-type HTTPTranscodedBridge struct {
+type TranscodedHTTPBridge struct {
 	logger     bridgelog.Logger
 	router     routing.HTTPRouter
 	transcoder transcoding.HTTPTranscoder
 }
 
-// NewHTTPTranscodedBridge initializes a new [HTTPTranscodedBridge] using the specified router and transcoder.
-func NewHTTPTranscodedBridge(router routing.HTTPRouter, transcoder transcoding.HTTPTranscoder, opts HTTPTranscodedBridgeOpts) *HTTPTranscodedBridge {
+// NewTranscodedHTTPBridge initializes a new [TranscodedHTTPBridge] using the specified router and transcoder.
+func NewTranscodedHTTPBridge(router routing.HTTPRouter, transcoder transcoding.HTTPTranscoder, opts TranscodedHTTPBridgeOpts) *TranscodedHTTPBridge {
 	opts = opts.withDefaults()
 
-	return &HTTPTranscodedBridge{
+	return &TranscodedHTTPBridge{
 		logger:     opts.Logger,
 		router:     router,
 		transcoder: transcoder,
@@ -60,7 +60,7 @@ func NewHTTPTranscodedBridge(router routing.HTTPRouter, transcoder transcoding.H
 }
 
 // ServeHTTP implements [net/http.Handler] so that the bridge is used as a normal HTTP handler.
-func (b *HTTPTranscodedBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *http.Request) {
+func (b *TranscodedHTTPBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *http.Request) {
 	w := &responseWrapper{ResponseWriter: unwrappedRW}
 
 	conn, route, err := b.router.RouteHTTP(r)
