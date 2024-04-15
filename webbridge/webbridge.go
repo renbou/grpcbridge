@@ -1,3 +1,12 @@
+// Package webbridge contains implementations of various handlers for bridging web-originated requests to gRPC.
+// It allows using gRPC-only services through all kinds of interfaces supporting all the possible streaming variants.
+//
+// The available functionality can be separated into two different kinds by the API format:
+//   - Typical REST-like API implemented using classic single-request-single-response and streamed HTTP requests,
+//     streaming WebSocket connections, and Server-Sent Events, all coming with support for request path parameters,
+//     query parameters, and custom body path specification.
+//   - Modern gRPC-Web API supporting both unary and streaming RPCs for HTTP and WebSocket requests,
+//     with WebTransport support planned, too.
 package webbridge
 
 import (
