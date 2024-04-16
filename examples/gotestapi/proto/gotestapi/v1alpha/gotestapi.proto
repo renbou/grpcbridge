@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package gotestapi.v1alpha;
 
+option go_package = "gotestapi/gen/proto/gotestapi/v1alpha;gotestapiv1alpha";
+
 // VeggieShop is an example service which is deprecated for v1.
 service VeggieShop {
   rpc CreatePurchase(CreatePurchaseRequest) returns (CreatePurchaseResponse);
@@ -24,4 +26,3 @@ message CreatePurchaseRequest {
 message CreatePurchaseResponse {
   string purchase_id = 1;
 }
-

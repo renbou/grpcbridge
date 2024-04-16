@@ -6,6 +6,7 @@ services:
       LOG_LEVEL: ${TESTAPI_LOG_LEVEL:-}
     ports:
       - "127.0.0.1:50051:50051"
+      - "127.0.0.1:50080:50080"
     restart: unless-stopped
   pytestapi:
     build: ./pytestapi

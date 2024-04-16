@@ -7,6 +7,8 @@ import "google/api/annotations.proto";
 // handles imports containing services not actually running on the server.
 import "gotestapi/v1alpha/gotestapi.proto";
 
+option go_package = "gotestapi/gen/proto/gotestapi/v1;gotestapiv1";
+
 // VeggieShopService is a simple example API used for demonstrating basic unary & streaming capabilities of grpcbridge.
 service VeggieShopService {
   // CreateShop is a unary RPC used to create a new example shop.
