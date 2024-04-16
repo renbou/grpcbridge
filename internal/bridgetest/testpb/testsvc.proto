@@ -31,6 +31,13 @@ service TestService {
       response_body: "not_a_field"
     };
   }
+
+  rpc Echo(Combined) returns (Combined) {
+    option (google.api.http) = {
+      post: "/service/echo"
+      body: "*"
+    };
+  }
 }
 
 message Combined {

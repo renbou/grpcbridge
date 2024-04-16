@@ -30,3 +30,7 @@ func (s *TestService) UnaryBound(ctx context.Context, req *Scalars) (*Combined, 
 func (s *TestService) BadResponsePath(context.Context, *Scalars) (*Combined, error) {
 	return new(Combined), nil
 }
+
+func (s *TestService) Echo(ctx context.Context, req *Combined) (*Combined, error) {
+	return req, nil
+}

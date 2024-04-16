@@ -23,6 +23,7 @@ const (
 	TestService_UnaryBound_FullMethodName      = "/grpcbridge.internal.bridgetest.testpb.TestService/UnaryBound"
 	TestService_UnaryCombined_FullMethodName   = "/grpcbridge.internal.bridgetest.testpb.TestService/UnaryCombined"
 	TestService_BadResponsePath_FullMethodName = "/grpcbridge.internal.bridgetest.testpb.TestService/BadResponsePath"
+	TestService_Echo_FullMethodName            = "/grpcbridge.internal.bridgetest.testpb.TestService/Echo"
 )
 
 // TestServiceClient is the client API for TestService service.
@@ -33,6 +34,7 @@ type TestServiceClient interface {
 	UnaryBound(ctx context.Context, in *Scalars, opts ...grpc.CallOption) (*Combined, error)
 	UnaryCombined(ctx context.Context, in *Combined, opts ...grpc.CallOption) (*Combined, error)
 	BadResponsePath(ctx context.Context, in *Scalars, opts ...grpc.CallOption) (*Combined, error)
+	Echo(ctx context.Context, in *Combined, opts ...grpc.CallOption) (*Combined, error)
 }
 
 type testServiceClient struct {
@@ -79,6 +81,15 @@ func (c *testServiceClient) BadResponsePath(ctx context.Context, in *Scalars, op
 	return out, nil
 }
 
+func (c *testServiceClient) Echo(ctx context.Context, in *Combined, opts ...grpc.CallOption) (*Combined, error) {
+	out := new(Combined)
+	err := c.cc.Invoke(ctx, TestService_Echo_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TestServiceServer is the server API for TestService service.
 // All implementations must embed UnimplementedTestServiceServer
 // for forward compatibility
@@ -87,6 +98,7 @@ type TestServiceServer interface {
 	UnaryBound(context.Context, *Scalars) (*Combined, error)
 	UnaryCombined(context.Context, *Combined) (*Combined, error)
 	BadResponsePath(context.Context, *Scalars) (*Combined, error)
+	Echo(context.Context, *Combined) (*Combined, error)
 	mustEmbedUnimplementedTestServiceServer()
 }
 
@@ -105,6 +117,9 @@ func (UnimplementedTestServiceServer) UnaryCombined(context.Context, *Combined) 
 }
 func (UnimplementedTestServiceServer) BadResponsePath(context.Context, *Scalars) (*Combined, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BadResponsePath not implemented")
+}
+func (UnimplementedTestServiceServer) Echo(context.Context, *Combined) (*Combined, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Echo not implemented")
 }
 func (UnimplementedTestServiceServer) mustEmbedUnimplementedTestServiceServer() {}
 
@@ -191,6 +206,24 @@ func _TestService_BadResponsePath_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TestService_Echo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Combined)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TestServiceServer).Echo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TestService_Echo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TestServiceServer).Echo(ctx, req.(*Combined))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TestService_ServiceDesc is the grpc.ServiceDesc for TestService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -213,6 +246,10 @@ var TestService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BadResponsePath",
 			Handler:    _TestService_BadResponsePath_Handler,
+		},
+		{
+			MethodName: "Echo",
+			Handler:    _TestService_Echo_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

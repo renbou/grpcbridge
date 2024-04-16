@@ -18,10 +18,10 @@ const (
 	TestDialTarget = "passthrough:///bridgetest"
 )
 
-func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Server, *grpcadapter.AdaptedClientPool, grpcadapter.ClientConn) {
+func mustRawServer(tb testing.TB, opts []grpc.ServerOption, prepareFuncs []func(*grpc.Server)) (*bufconn.Listener, *grpc.Server) {
 	// Relatively big buffer to allow all test goroutines to communicate without blocking.
 	listener := bufconn.Listen(1 << 20)
-	server := grpc.NewServer()
+	server := grpc.NewServer(opts...)
 
 	for _, prepare := range prepareFuncs {
 		prepare(server)
@@ -38,6 +38,12 @@ func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Se
 			tb.Errorf("unexpected error while closing bufconn.Listener: %s", err)
 		}
 	})
+
+	return listener, server
+}
+
+func MustGRPCServer(tb testing.TB, prepareFuncs ...func(*grpc.Server)) (*grpc.Server, *grpcadapter.AdaptedClientPool, grpcadapter.ClientConn) {
+	listener, server := mustRawServer(tb, nil, prepareFuncs)
 
 	pool := grpcadapter.NewAdaptedClientPool(grpcadapter.AdaptedClientPoolOpts{
 		DefaultOpts: []grpc.DialOption{
