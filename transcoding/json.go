@@ -67,9 +67,9 @@ type jsonDecoder struct {
 	dec *json.Decoder
 }
 
-// ContentTypes returns a single-element slice containing "application/json".
-func (m *JSONMarshaler) ContentTypes() []string {
-	return []string{contentTypeJSON}
+// ContentType returns "application/json" and binary = false, because JSON is UTF-8 by default.
+func (m *JSONMarshaler) ContentType() (mime string, binary bool) {
+	return contentTypeJSON, false
 }
 
 // Marshal marshals the given protobuf message or field to JSON.

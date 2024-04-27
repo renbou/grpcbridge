@@ -20,6 +20,8 @@ import (
 )
 
 // Marshaler defines a converter interface for arbitrary protoreflect messages and their fields.
+// Marshalers are used by the default [HTTPTranscoder] implementation, [StandardTranscoder].
+//
 // At the minimum, a Marshaler should support converting single messages,
 // but it can additionally support encoding and decoding to/from a stream by implementing [StreamMarshaler],
 // in which case it will be usable for message streams over protocols such as HTTP.
@@ -29,8 +31,10 @@ import (
 type Marshaler interface {
 	Marshal(bridgedesc.TypeResolver, protoreflect.Message, protoreflect.FieldDescriptor) ([]byte, error)
 	Unmarshal(bridgedesc.TypeResolver, []byte, protoreflect.Message, protoreflect.FieldDescriptor) error
-	// ContentTypes should return the MIME content types for which this marshaler can be used.
-	ContentTypes() []string
+	// ContentType should return the MIME content type for which this marshaler can be used,
+	// and whether messages of such type are valid UTF-8 strings, or some other binary data.
+	// This distinction between UTF-8/non-UTF-8 is important for protocols such as WebSocket.
+	ContentType() (mime string, binary bool)
 }
 
 // StreamMarshaler defines additional methods for a [Marshaler], which, if implemented,
@@ -88,11 +92,11 @@ type HTTPTranscoder interface {
 // (by default errors should be interpreted as InvalidArgument),
 // and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
 //
-// ContentType accepts a message since some requests might have dynamic content type mapping.
-// By default, however, the [StandardTranscoder] doesn't support this, and always returns a static content type.
+// Contrary to [HTTPResponseTranscoder], ContentType doesn't accept any parameters as the it
+// can be determined when a request is bound, from its headers and other metadata.
 type HTTPRequestTranscoder interface {
 	Transcode([]byte, proto.Message) error
-	ContentType(proto.Message) string
+	ContentType() (mime string, binary bool)
 }
 
 // HTTPResponseTranscoder is responsible for transcoding response messages bound to a specific HTTP request.
@@ -104,12 +108,14 @@ type HTTPRequestTranscoder interface {
 // Errors returned by Transcode can be gRPC status errors to set custom status info (by default errors should be interpreted as Internal),
 // and they can additionally implement interface { HTTPStatus() int } to return a custom HTTP status code.
 //
-// ContentType accepts a message since some responses might have dynamic content type mapping, such as [google/api/httpbody.proto].
+// ContentType accepts a message since some responses might have dynamic content type mapping, such as [google/api/httpbody.proto],
+// which can only be determined when the actual response has arrived.
+// Currently, however, the default [StandardTranscoder] doesn't support this, and always returns a static content type.
 //
 // [google/api/httpbody.proto]: https://github.com/googleapis/googleapis/blob/master/google/api/httpbody.proto
 type HTTPResponseTranscoder interface {
 	Transcode(proto.Message) ([]byte, error)
-	ContentType(proto.Message) string
+	ContentType(proto.Message) (mime string, binary bool)
 }
 
 // RequestStreamTranscoder should be implemented by bound transcoders supporting receiving request messages over a binary stream,

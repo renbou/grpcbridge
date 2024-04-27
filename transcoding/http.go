@@ -83,9 +83,8 @@ func NewStandardTranscoder(opts StandardTranscoderOpts) *StandardTranscoder {
 
 	mimeMarshalers := make(map[string]Marshaler)
 	for _, marshaler := range opts.Marshalers {
-		for _, mimeType := range marshaler.ContentTypes() {
-			mimeMarshalers[mimeType] = marshaler
-		}
+		mimeType, _ := marshaler.ContentType()
+		mimeMarshalers[mimeType] = marshaler
 	}
 
 	return &StandardTranscoder{
@@ -108,29 +107,28 @@ func NewStandardTranscoder(opts StandardTranscoderOpts) *StandardTranscoder {
 // Bind expects *most* of the fields of HTTPRequest to be non-nil, for example, using the type resolver in HTTPRequest.Target
 // for transcoding complex message types.
 func (t *StandardTranscoder) Bind(req HTTPRequest) (HTTPRequestTranscoder, HTTPResponseTranscoder, error) {
-	requestMarshaler, requestMimeType, err := t.pickRequestMarshaler(&req)
+	requestMarshaler, err := t.pickRequestMarshaler(&req)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	responseMarshaler, responseMimeType, ok := t.pickResponseMarshaler(&req)
+	responseMarshaler, ok := t.pickResponseMarshaler(&req)
 	if !ok {
 		responseMarshaler = requestMarshaler
-		responseMimeType = requestMimeType
 	}
 
 	bt := &boundTranscoder{req: req}
-	in := newRequestTranscoder(bt, requestMarshaler, requestMimeType)
-	out := newResponseTranscoder(bt, responseMarshaler, responseMimeType)
+	in := newRequestTranscoder(bt, requestMarshaler)
+	out := newResponseTranscoder(bt, responseMarshaler)
 
 	return in, out, nil
 }
 
-func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, string, error) {
+func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, error) {
 	ctHeader := req.RawRequest.Header[contentTypeHeader]
 
 	if len(ctHeader) == 0 {
-		return t.defaultMarshaler, t.defaultMarshaler.ContentTypes()[0], nil
+		return t.defaultMarshaler, nil
 	}
 
 	for _, ct := range ctHeader {
@@ -140,22 +138,22 @@ func (t *StandardTranscoder) pickRequestMarshaler(req *HTTPRequest) (Marshaler, 
 		}
 
 		if marshaler, ok := t.mimeMarshalers[mt]; ok {
-			return marshaler, mt, nil
+			return marshaler, nil
 		}
 	}
 
-	return nil, "", httperr.Status(http.StatusUnsupportedMediaType, status.Errorf(codes.InvalidArgument, http.StatusText(http.StatusUnsupportedMediaType)))
+	return nil, httperr.Status(http.StatusUnsupportedMediaType, status.Errorf(codes.InvalidArgument, http.StatusText(http.StatusUnsupportedMediaType)))
 }
 
-func (t *StandardTranscoder) pickResponseMarshaler(req *HTTPRequest) (Marshaler, string, bool) {
+func (t *StandardTranscoder) pickResponseMarshaler(req *HTTPRequest) (Marshaler, bool) {
 	for _, mt := range req.RawRequest.Header[acceptHeader] {
 		// No need to parse the Accept header, it should be in type/subtype format anyway.
 		if marshaler, ok := t.mimeMarshalers[mt]; ok {
-			return marshaler, mt, true
+			return marshaler, true
 		}
 	}
 
-	return nil, "", false
+	return nil, false
 }
 
 // boundTranscoder holds shared parameters for both of the bound transcoders.
@@ -164,8 +162,8 @@ type boundTranscoder struct {
 }
 
 // newRequestTranscoder creates a new incoming transcoder with additional streaming capabilities if the marshaler supports it.
-func newRequestTranscoder(bt *boundTranscoder, marshaler Marshaler, mimeType string) HTTPRequestTranscoder {
-	t := &standardRequestTranscoder{boundTranscoder: bt, marshaler: marshaler, mimeType: mimeType}
+func newRequestTranscoder(bt *boundTranscoder, marshaler Marshaler) HTTPRequestTranscoder {
+	t := &standardRequestTranscoder{boundTranscoder: bt, marshaler: marshaler}
 
 	if sm, ok := marshaler.(StreamMarshaler); ok {
 		return &standardRequestStreamTranscoder{standardRequestTranscoder: t, streamer: sm}
@@ -178,7 +176,6 @@ func newRequestTranscoder(bt *boundTranscoder, marshaler Marshaler, mimeType str
 type standardRequestTranscoder struct {
 	*boundTranscoder
 	marshaler   Marshaler
-	mimeType    string
 	queryFilter *utilities.DoubleArray
 }
 
@@ -258,13 +255,13 @@ func (t *standardRequestTranscoder) queryParamFilter() *utilities.DoubleArray {
 	return t.queryFilter
 }
 
-func (t *standardRequestTranscoder) ContentType(proto.Message) string {
-	return t.mimeType
+func (t *standardRequestTranscoder) ContentType() (mime string, binary bool) {
+	return t.marshaler.ContentType()
 }
 
 // newResponseTranscoder creates a new outgoing transcoder with additional streaming capabilities if the marshaler supports it.
-func newResponseTranscoder(bt *boundTranscoder, marshaler Marshaler, mimeType string) HTTPResponseTranscoder {
-	t := &standardResponseTranscoder{boundTranscoder: bt, marshaler: marshaler, mimeType: mimeType}
+func newResponseTranscoder(bt *boundTranscoder, marshaler Marshaler) HTTPResponseTranscoder {
+	t := &standardResponseTranscoder{boundTranscoder: bt, marshaler: marshaler}
 
 	if sm, ok := marshaler.(StreamMarshaler); ok {
 		return &standardResponseStreamTranscoder{standardResponseTranscoder: t, streamer: sm}
@@ -277,7 +274,6 @@ func newResponseTranscoder(bt *boundTranscoder, marshaler Marshaler, mimeType st
 type standardResponseTranscoder struct {
 	*boundTranscoder
 	marshaler Marshaler
-	mimeType  string
 }
 
 // Transcode transcodes a new request according to the rules specified in http.proto,
@@ -316,8 +312,8 @@ func (t *standardResponseTranscoder) transcodeFunc(protomsg proto.Message, f fun
 	return nil
 }
 
-func (t *standardResponseTranscoder) ContentType(proto.Message) string {
-	return t.mimeType
+func (t *standardResponseTranscoder) ContentType(_ proto.Message) (mime string, binary bool) {
+	return t.marshaler.ContentType()
 }
 
 // standardRequestStreamTranscoder is a wrapper around [defaultIncomingTranscoder] for marshalers supporting streaming.
