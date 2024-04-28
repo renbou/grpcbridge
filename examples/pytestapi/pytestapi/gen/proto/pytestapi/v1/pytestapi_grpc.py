@@ -10,8 +10,9 @@ if typing.TYPE_CHECKING:
     import grpclib.server
 
 import google.protobuf.empty_pb2
-import google.protobuf.wrappers_pb2
 import google.protobuf.timestamp_pb2
+import google.protobuf.wrappers_pb2
+import proto.google.api.annotations_pb2
 import proto.pytestapi.v1.pytestapi_pb2
 
 

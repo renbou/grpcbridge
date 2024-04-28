@@ -57,8 +57,6 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 		return err
 	}
 
-	logger := s.logger.With("target", route.Target.Name, "method", route.Method.RPCName)
-
 	// TODO(renbou): timeouts for stream initiation and Recv/Sends
 	outgoing, err := conn.Stream(incoming.Context(), route.Method.RPCName)
 	if err != nil {
@@ -68,6 +66,7 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 	// Always clean up the outgoing stream by explicitly closing it.
 	defer outgoing.Close()
 
+	logger := s.logger.With("target", route.Target.Name, "grpc.method", route.Method.RPCName)
 	logger.Debug("began proxying gRPC stream")
 	defer logger.Debug("ended proxying gRPC stream")
 

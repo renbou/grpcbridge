@@ -41,7 +41,7 @@ func mainImpl() error {
 	router := grpcbridge.NewReflectionRouter(
 		grpcbridge.WithLogger(logger),
 		grpcbridge.WithDialOpts(grpc.WithTransportCredentials(insecure.NewCredentials())),
-		grpcbridge.WithReflectionPollInterval(time.Second*5),
+		grpcbridge.WithReflectionPollInterval(time.Second*30),
 	)
 
 	for _, cfg := range cfg.Services {

@@ -65,7 +65,8 @@ func transcodeError(w *responseWrapper, t transcoding.HTTPResponseTranscoder, er
 
 	respData, transcodeErr := t.Transcode(stProto)
 	if transcodeErr == nil {
-		w.Header()[contentTypeHeader] = []string{t.ContentType(stProto)}
+		ct, _ := t.ContentType(stProto)
+		w.Header()[contentTypeHeader] = []string{ct}
 	} else {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "unable to transcode response status code = %s desc = %s: %s\n", st.Code(), st.Message(), transcodeErr)
@@ -122,6 +123,7 @@ func responseTranscodingError(err error) error {
 func wrapTranscodingError(err error, defaultCode codes.Code) error {
 	type grpcstatus interface{ GRPCStatus() *status.Status }
 
+	// Manual type check to only use status errors coming from the actual transcoder, not wrapped ones.
 	if err == nil {
 		return nil
 	} else if _, ok := err.(grpcstatus); ok {

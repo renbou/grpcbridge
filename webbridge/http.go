@@ -53,7 +53,7 @@ func NewTranscodedHTTPBridge(router routing.HTTPRouter, transcoder transcoding.H
 	opts = opts.withDefaults()
 
 	return &TranscodedHTTPBridge{
-		logger:     opts.Logger,
+		logger:     opts.Logger.WithComponent("grpcbridge.web"),
 		router:     router,
 		transcoder: transcoder,
 	}
@@ -61,42 +61,87 @@ func NewTranscodedHTTPBridge(router routing.HTTPRouter, transcoder transcoding.H
 
 // ServeHTTP implements [net/http.Handler] so that the bridge is used as a normal HTTP handler.
 func (b *TranscodedHTTPBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *http.Request) {
-	w := &responseWrapper{ResponseWriter: unwrappedRW}
-
-	conn, route, err := b.router.RouteHTTP(r)
-	if err != nil {
-		writeError(w, r, nil, err)
+	req := routeTranscodedRequest(unwrappedRW, r, b.router, b.transcoder)
+	if req == nil {
 		return
 	}
 
-	reqtc, resptc, err := b.transcoder.Bind(transcoding.HTTPRequest{
-		Target:     route.Target,
-		Service:    route.Service,
-		Method:     route.Method,
-		Binding:    route.Binding,
-		RawRequest: r,
-		PathParams: route.PathParams,
+	// Currently, no extra checks are performed here, but transcoder streaming validity should be checked.
+	if ok := req.connect(); !ok {
+		return
+	}
+
+	// Always clean up the outgoing stream by explicitly closing it.
+	defer req.outgoing.Close()
+
+	logger := b.logger.With(
+		"target", req.route.Target.Name,
+		"grpc.method", req.route.Method.RPCName,
+		"http.method", r.Method,
+		"http.path", r.URL.Path,
+		"http.params", req.route.PathParams,
+	)
+	logger.Debug("began handling HTTP request")
+	defer logger.Debug("ended handling HTTP request")
+
+	err := grpcadapter.ForwardServerToClient(r.Context(), grpcadapter.ForwardS2C{
+		Incoming: &unaryHTTPStream{w: req.w, r: r, reqtc: req.reqtc, resptc: req.resptc, readCh: make(chan struct{})},
+		Outgoing: req.outgoing,
+		Method:   req.route.Method,
 	})
 	if err != nil {
-		writeError(w, r, nil, err)
-		return
+		writeError(req.w, r, req.resptc, err)
 	}
+}
+
+type transcodedRequest struct {
+	w        *responseWrapper
+	r        *http.Request
+	conn     grpcadapter.ClientConn
+	route    routing.HTTPRoute
+	outgoing grpcadapter.ClientStream
+	reqtc    transcoding.HTTPRequestTranscoder
+	resptc   transcoding.HTTPResponseTranscoder
+}
+
+func routeTranscodedRequest(unwrappedRW http.ResponseWriter, r *http.Request, router routing.HTTPRouter, transcoder transcoding.HTTPTranscoder) *transcodedRequest {
+	var err error
+
+	req := &transcodedRequest{w: &responseWrapper{ResponseWriter: unwrappedRW}, r: r}
+
+	req.conn, req.route, err = router.RouteHTTP(req.r)
+	if err != nil {
+		writeError(req.w, req.r, nil, err)
+		return nil
+	}
+
+	req.reqtc, req.resptc, err = transcoder.Bind(transcoding.HTTPRequest{
+		Target:     req.route.Target,
+		Service:    req.route.Service,
+		Method:     req.route.Method,
+		Binding:    req.route.Binding,
+		RawRequest: req.r,
+		PathParams: req.route.PathParams,
+	})
+	if err != nil {
+		writeError(req.w, req.r, nil, err)
+		return nil
+	}
+
+	return req
+}
+
+func (req *transcodedRequest) connect() bool {
+	var err error
 
 	// At this point all responses including errors should be transcoded to get properly parsed by a client.
-	outgoing, err := conn.Stream(r.Context(), route.Method.RPCName)
+	req.outgoing, err = req.conn.Stream(req.r.Context(), req.route.Method.RPCName)
 	if err != nil {
-		writeError(w, r, resptc, err)
-		return
+		writeError(req.w, req.r, req.resptc, err)
+		return false
 	}
 
-	err = grpcadapter.ForwardServerToClient(r.Context(), grpcadapter.ForwardS2C{
-		Incoming: &unaryHTTPStream{w: w, r: r, reqtc: reqtc, resptc: resptc, readCh: make(chan struct{})},
-		Outgoing: outgoing,
-		Method:   route.Method,
-	})
-	if err != nil {
-		writeError(w, r, resptc, err)
-	}
+	return true
 }
 
 type unaryHTTPStream struct {
@@ -104,17 +149,18 @@ type unaryHTTPStream struct {
 	r      *http.Request
 	reqtc  transcoding.HTTPRequestTranscoder
 	resptc transcoding.HTTPResponseTranscoder
-	read   bool
+	read   bool // not synchronized because Recv() cannot be called concurrently
 	readCh chan struct{}
-	sent   bool
+	sent   bool // not synchronized because Send() cannot be called concurrently
 }
 
+// TODO(renbou): support context for cancelling send when the server fails.
 func (s *unaryHTTPStream) Send(_ context.Context, msg proto.Message) error {
 	if s.sent {
 		return status.Error(codes.Internal, "grpcbridge: tried sending second response on unary stream")
 	}
 
-	// Wait for request to be sent, because after this we aren't guaranteed to be able to read the request body,
+	// Wait for request to be received, because after this we aren't guaranteed to be able to read the request body,
 	// for example when using HTTP/1.1. See http.ResponseWriter.Write comment for more info.
 	<-s.readCh
 
@@ -126,9 +172,14 @@ func (s *unaryHTTPStream) Send(_ context.Context, msg proto.Message) error {
 	// Set here, because Write can perform a partial write and still return an error
 	s.sent = true
 
-	s.w.Header()[contentTypeHeader] = []string{s.resptc.ContentType(msg)}
-	_, err = s.w.Write(b)
-	return err
+	ct, _ := s.resptc.ContentType(msg) // don't care about whether the response is in binary/utf8
+	s.w.Header()[contentTypeHeader] = []string{ct}
+
+	if _, err = s.w.Write(b); err != nil {
+		return status.Errorf(codes.Internal, "failed to write response body: %s", err)
+	}
+
+	return nil
 }
 
 func (s *unaryHTTPStream) Recv(_ context.Context, msg proto.Message) error {

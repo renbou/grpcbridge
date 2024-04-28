@@ -4,14 +4,20 @@ package pytestapi.v1;
 
 // Well-known imports to test grpcbridge's ability to handle multiple imports & slightly more complex messages.
 import "google/protobuf/empty.proto";
-import "google/protobuf/wrappers.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+import "proto/google/api/annotations.proto";
 
 // IOTEventsService is an example API used for demonstrating bidirectional streaming via grpcbridge.
 service IOTEventsService {
   // StreamEvents is a bi-directional streaming RPC that allows a client
-  // to both emit new events and monitor the occurring events. 
-  rpc StreamEvents(stream StreamEventsRequest) returns (stream StreamEventsResponse);
+  // to both emit new events and monitor the occurring events.
+  rpc StreamEvents(stream StreamEventsRequest) returns (stream StreamEventsResponse) {
+    option (google.api.http) = {
+      get: "/api/iot/v1:ws"
+      body: "*"
+    };
+  }
 }
 
 message Event {

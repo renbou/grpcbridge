@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/renbou/grpcbridge/bridgelog"
+	"github.com/renbou/grpcbridge/internal/ascii"
 	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
 	"github.com/renbou/grpcbridge/webbridge"
@@ -34,7 +35,8 @@ type BridgeOption interface {
 
 // WebBridge provides a single entrypoint for all web-originating requests which are bridged to target gRPC services with various applied transformations.
 type WebBridge struct {
-	transcodedHTTPBridge *webbridge.TranscodedHTTPBridge
+	transcodedHTTPBridge      *webbridge.TranscodedHTTPBridge
+	transcodedWebSocketBridge *webbridge.TranscodedWebSocketBridge
 }
 
 // NewWebBridge constructs a new [*WebBridge] with the given router and options.
@@ -49,13 +51,21 @@ func NewWebBridge(router Router, opts ...BridgeOption) *WebBridge {
 
 	transcoder := transcoding.NewStandardTranscoder(options.transcoderOpts)
 	transcodedHTTPBridge := webbridge.NewTranscodedHTTPBridge(router, transcoder, webbridge.TranscodedHTTPBridgeOpts{Logger: options.common.logger})
+	transcodedWebSocketBridge := webbridge.NewTranscodedWebSocketBridge(router, transcoder, webbridge.TranscodedWebSocketBridgeOpts{Logger: options.common.logger})
 
-	return &WebBridge{transcodedHTTPBridge: transcodedHTTPBridge}
+	return &WebBridge{transcodedHTTPBridge: transcodedHTTPBridge, transcodedWebSocketBridge: transcodedWebSocketBridge}
 }
 
 // ServeHTTP implements [net/http.Handler] and routes the request to the appropriate bridging handler according to these rules:
-//  1. All requests are currently handled by [webbridge.TranscodedHTTPBridge].
+//  1. WebSocket upgrades (Connection: Upgrade and Upgrade: WebSocket) are handled by [webbridge.TranscodedWebSocketBridge].
+//  2. All other requests are handled by [webbridge.TranscodedHTTPBridge].
 func (b *WebBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Case-insensitive comparison as specified in the RFC https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1.
+	if ascii.EqualFold(r.Header.Get("Connection"), "upgrade") && ascii.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		b.transcodedWebSocketBridge.ServeHTTP(w, r)
+		return
+	}
+
 	b.transcodedHTTPBridge.ServeHTTP(w, r)
 }
 
