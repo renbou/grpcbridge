@@ -59,7 +59,9 @@ func (cc *AdaptedClientConn) Stream(ctx context.Context, method string) (ClientS
 	// Create new context for the whole stream operation, and use the passed context only for the actual initialization.
 	streamCtx, cancel := context.WithCancel(context.Background())
 	wrapped := &AdaptedClientStream{
-		closeFunc: sync.OnceFunc(cancel), // guaranteed to be called by Recv/Send on failure, otherwise needs to be called by caller
+		// guaranteed to be called by Recv/Send on failure, otherwise needs to be called by caller.
+		// we initialize it here because the initial NewStream() can also fail and execute Close().
+		closeFunc: sync.OnceFunc(cancel),
 	}
 
 	err = wrapped.withCtx(ctx, func() error {

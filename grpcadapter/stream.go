@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -31,6 +32,15 @@ func (s *AdaptedClientStream) Recv(ctx context.Context, msg proto.Message) error
 	defer s.recvOps.Add(-1)
 
 	return s.withCtx(ctx, func() error { return s.stream.RecvMsg(msg) })
+}
+
+func (s *AdaptedClientStream) Header() metadata.MD {
+	md, _ := s.stream.Header()
+	return md
+}
+
+func (s *AdaptedClientStream) Trailer() metadata.MD {
+	return s.stream.Trailer()
 }
 
 func (s *AdaptedClientStream) CloseSend() {
