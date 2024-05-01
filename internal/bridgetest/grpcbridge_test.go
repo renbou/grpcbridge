@@ -56,7 +56,7 @@ func Test_GRPCBridge(t *testing.T) {
 	// Arrange
 	// Set up a single complete grpcbridge instance for all tests to test parallelism.
 	targetListener, targetServer := mustRawServer(t, nil, []func(*grpc.Server){func(s *grpc.Server) {
-		testpb.RegisterTestServiceServer(s, new(testpb.TestService))
+		testpb.RegisterTestServiceServer(s, testpb.NewTestService())
 		reflection.Register(s)
 	}})
 

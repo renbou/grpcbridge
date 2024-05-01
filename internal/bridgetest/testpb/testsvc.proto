@@ -3,6 +3,8 @@ syntax = "proto3";
 package grpcbridge.internal.bridgetest.testpb;
 
 import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/rpc/status.proto";
 import "messages.proto";
 
 option go_package = "github.com/renbou/grpcbridge/internal/bridgetest/testpb";
@@ -38,9 +40,41 @@ service TestService {
       body: "*"
     };
   }
+
+  // Flow handlers are used to test various streaming flow scenarios.
+  rpc UnaryFlow(FlowMessage) returns (FlowMessage);
+
+  rpc ClientFlow(stream FlowMessage) returns (FlowMessage);
+
+  rpc ServerFlow(FlowMessage) returns (stream FlowMessage) {
+    option (google.api.http) = {
+      get: "/flow/server"
+      additional_bindings {
+        get: "/flow/server:ws"
+        body: "message"
+      }
+    };
+  }
+
+  rpc BiDiFlow(stream FlowMessage) returns (stream FlowMessage);
 }
 
 message Combined {
   Scalars scalars = 1;
   NonScalars non_scalars = 2;
+}
+
+message FlowMessage {
+  string message = 1;
+}
+
+// FlowAction is used by TestService to control the execution of Flow endpoints.
+message FlowAction {
+  oneof action {
+    FlowMessage expect_message = 1;
+    bool expect_close = 2;
+    FlowMessage send_message = 3;
+    google.rpc.Status send_status = 4;
+    google.protobuf.Duration sleep = 5;
+  }
 }
