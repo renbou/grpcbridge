@@ -19,7 +19,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run tests and collect coverage
-        run: make coverpkg
+        run: make coverpkg FLAGS="-coverpkg ./..."
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
