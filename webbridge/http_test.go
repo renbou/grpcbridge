@@ -19,7 +19,7 @@ import (
 
 func mustTranscodedHTTPBridge(t *testing.T) (*testpb.TestService, *TranscodedHTTPBridge) {
 	testsvc, router, transcoder := mustTranscodedTestSvc(t)
-	bridge := NewTranscodedHTTPBridge(router, transcoder, TranscodedHTTPBridgeOpts{})
+	bridge := NewTranscodedHTTPBridge(router, TranscodedHTTPBridgeOpts{Transcoder: transcoder})
 
 	return testsvc, bridge
 }

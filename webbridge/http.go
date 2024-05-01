@@ -4,12 +4,15 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"github.com/renbou/grpcbridge/internal/rpcutil"
 	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -18,11 +21,25 @@ import (
 type TranscodedHTTPBridgeOpts struct {
 	// Logs are discarded by default.
 	Logger bridgelog.Logger
+
+	// If not set, the default [transcoding.StandardTranscoder] is created with default options.
+	Transcoder transcoding.HTTPTranscoder
+
+	// If not set, the default [grpcadapter.ProxyForwarder] is created with default options.
+	Forwarder grpcadapter.Forwarder
 }
 
 func (o TranscodedHTTPBridgeOpts) withDefaults() TranscodedHTTPBridgeOpts {
 	if o.Logger == nil {
 		o.Logger = bridgelog.Discard()
+	}
+
+	if o.Transcoder == nil {
+		o.Transcoder = transcoding.NewStandardTranscoder(transcoding.StandardTranscoderOpts{})
+	}
+
+	if o.Forwarder == nil {
+		o.Forwarder = grpcadapter.NewProxyForwarder(grpcadapter.ProxyForwarderOpts{})
 	}
 
 	return o
@@ -46,16 +63,19 @@ type TranscodedHTTPBridge struct {
 	logger     bridgelog.Logger
 	router     routing.HTTPRouter
 	transcoder transcoding.HTTPTranscoder
+	forwarder  grpcadapter.Forwarder
 }
 
-// NewTranscodedHTTPBridge initializes a new [TranscodedHTTPBridge] using the specified router and transcoder.
-func NewTranscodedHTTPBridge(router routing.HTTPRouter, transcoder transcoding.HTTPTranscoder, opts TranscodedHTTPBridgeOpts) *TranscodedHTTPBridge {
+// NewTranscodedHTTPBridge initializes a new [TranscodedHTTPBridge] using the specified router and options.
+// The router isn't optional, because no routers in grpcbridge can be constructed without some form of required args.
+func NewTranscodedHTTPBridge(router routing.HTTPRouter, opts TranscodedHTTPBridgeOpts) *TranscodedHTTPBridge {
 	opts = opts.withDefaults()
 
 	return &TranscodedHTTPBridge{
 		logger:     opts.Logger.WithComponent("grpcbridge.web"),
 		router:     router,
-		transcoder: transcoder,
+		transcoder: opts.Transcoder,
+		forwarder:  opts.Forwarder,
 	}
 }
 
@@ -66,13 +86,7 @@ func (b *TranscodedHTTPBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *htt
 		return
 	}
 
-	// Currently, no extra checks are performed here, but transcoder streaming validity should be checked.
-	if ok := req.connect(); !ok {
-		return
-	}
-
-	// Always clean up the outgoing stream by explicitly closing it.
-	defer req.outgoing.Close()
+	// TODO(renbou): check that only unary requests are handled here, at least for now.
 
 	logger := b.logger.With(
 		"target", req.route.Target.Name,
@@ -84,24 +98,27 @@ func (b *TranscodedHTTPBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *htt
 	logger.Debug("began handling HTTP request")
 	defer logger.Debug("ended handling HTTP request")
 
-	err := grpcadapter.ForwardServerToClient(r.Context(), grpcadapter.ForwardS2C{
-		Incoming: &unaryHTTPStream{w: req.w, r: r, reqtc: req.reqtc, resptc: req.resptc, readCh: make(chan struct{})},
-		Outgoing: req.outgoing,
+	ctx := metadata.NewIncomingContext(r.Context(), headersToMD(r.Header))
+
+	err := b.forwarder.Forward(ctx, grpcadapter.ForwardParams{
+		Target:   req.route.Target,
+		Service:  req.route.Service,
 		Method:   req.route.Method,
+		Incoming: &unaryHTTPStream{logger: logger, w: req.w, r: r, reqtc: req.reqtc, resptc: req.resptc, readCh: make(chan struct{})},
+		Outgoing: req.conn,
 	})
 	if err != nil {
-		writeError(req.w, r, req.resptc, err)
+		writeError(req.w, req.r, req.resptc, err)
 	}
 }
 
 type transcodedRequest struct {
-	w        *responseWrapper
-	r        *http.Request
-	conn     grpcadapter.ClientConn
-	route    routing.HTTPRoute
-	outgoing grpcadapter.ClientStream
-	reqtc    transcoding.HTTPRequestTranscoder
-	resptc   transcoding.HTTPResponseTranscoder
+	w      *responseWrapper
+	r      *http.Request
+	conn   grpcadapter.ClientConn
+	route  routing.HTTPRoute
+	reqtc  transcoding.HTTPRequestTranscoder
+	resptc transcoding.HTTPResponseTranscoder
 }
 
 func routeTranscodedRequest(unwrappedRW http.ResponseWriter, r *http.Request, router routing.HTTPRouter, transcoder transcoding.HTTPTranscoder) *transcodedRequest {
@@ -131,31 +148,36 @@ func routeTranscodedRequest(unwrappedRW http.ResponseWriter, r *http.Request, ro
 	return req
 }
 
-func (req *transcodedRequest) connect() bool {
-	var err error
-
-	// At this point all responses including errors should be transcoded to get properly parsed by a client.
-	req.outgoing, err = req.conn.Stream(req.r.Context(), req.route.Method.RPCName)
-	if err != nil {
-		writeError(req.w, req.r, req.resptc, err)
-		return false
-	}
-
-	return true
-}
-
 type unaryHTTPStream struct {
+	logger bridgelog.Logger
+
 	w      *responseWrapper
 	r      *http.Request
 	reqtc  transcoding.HTTPRequestTranscoder
 	resptc transcoding.HTTPResponseTranscoder
-	read   bool // not synchronized because Recv() cannot be called concurrently
+
+	sendActive atomic.Bool
+	recvActive atomic.Bool
+
+	read   bool // not synchronized because recv() cannot be called concurrently
 	readCh chan struct{}
-	sent   bool // not synchronized because Send() cannot be called concurrently
+	sent   bool // not synchronized because send() cannot be called concurrently
 }
 
-// TODO(renbou): support context for cancelling send when the server fails.
-func (s *unaryHTTPStream) Send(_ context.Context, msg proto.Message) error {
+func (s *unaryHTTPStream) Send(ctx context.Context, msg proto.Message) error {
+	s.setSendActive()
+	defer s.sendActive.Store(false)
+
+	return s.withCtx(ctx, func() error { return s.send(msg) })
+}
+
+func (s *unaryHTTPStream) setSendActive() {
+	if !s.sendActive.CompareAndSwap(false, true) {
+		panic("grpcbridge: Send()/SetHeader()/SetTrailer() called concurrently on unaryHTTPStream")
+	}
+}
+
+func (s *unaryHTTPStream) send(msg proto.Message) error {
 	if s.sent {
 		return status.Error(codes.Internal, "grpcbridge: tried sending second response on unary stream")
 	}
@@ -176,20 +198,29 @@ func (s *unaryHTTPStream) Send(_ context.Context, msg proto.Message) error {
 	s.w.Header()[contentTypeHeader] = []string{ct}
 
 	if _, err = s.w.Write(b); err != nil {
-		return status.Errorf(codes.Internal, "failed to write response body: %s", err)
+		return status.Errorf(codes.Unavailable, "failed to write response body: %s", err)
 	}
 
 	return nil
 }
 
-func (s *unaryHTTPStream) Recv(_ context.Context, msg proto.Message) error {
+func (s *unaryHTTPStream) Recv(ctx context.Context, msg proto.Message) error {
+	if !s.recvActive.CompareAndSwap(false, true) {
+		panic("grpcbridge: Recv() called concurrently on unaryHTTPStream")
+	}
+	defer s.recvActive.Store(false)
+
+	return s.withCtx(ctx, func() error { return s.recv(msg) })
+}
+
+func (s *unaryHTTPStream) recv(msg proto.Message) error {
 	if s.read {
 		return io.EOF
 	}
 
 	b, err := io.ReadAll(s.r.Body)
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "failed to read request body: %s", err)
+		return status.Errorf(codes.Unavailable, "failed to read request body: %s", err)
 	}
 
 	s.read = true
@@ -201,4 +232,56 @@ func (s *unaryHTTPStream) Recv(_ context.Context, msg proto.Message) error {
 	}
 
 	return requestTranscodingError(s.reqtc.Transcode(b, msg))
+}
+
+func (s *unaryHTTPStream) SetHeader(md metadata.MD) {
+	s.setSendActive()
+	defer s.sendActive.Store(false)
+
+	if s.sent {
+		s.logger.Warn("SetHeader() called on already-sent unary stream")
+		return
+	}
+
+	s.appendHeaders(md)
+}
+
+func (s *unaryHTTPStream) SetTrailer(md metadata.MD) {
+	s.setSendActive()
+	defer s.sendActive.Store(false)
+
+	if s.sent {
+		// gRPC services usually don't return a "Trailer" header containing a list of all the trailers,
+		// so we set these headers using the TrailerPrefix functionality, and they will be sent after ServeHTTP returns.
+		for k, v := range md {
+			k = http.CanonicalHeaderKey(http.TrailerPrefix + k)
+			s.w.Header()[k] = append(s.w.Header()[k], v...)
+		}
+		return
+	}
+
+	// This is the path taken by unary calls if the forwarder supports it,
+	// for which we can actually send the trailers as headers.
+	s.appendHeaders(md)
+}
+
+func (s *unaryHTTPStream) appendHeaders(md metadata.MD) {
+	for k, v := range md {
+		k = http.CanonicalHeaderKey(k)
+		s.w.Header()[k] = append(s.w.Header()[k], v...)
+	}
+}
+
+func (s *unaryHTTPStream) withCtx(ctx context.Context, f func() error) error {
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- f()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return rpcutil.ContextError(ctx.Err())
+	case err := <-errChan:
+		return err
+	}
 }
