@@ -34,7 +34,7 @@ zzz.protodeps:
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
 
 # Generate protos for tests
-.PHONY: proto
-proto: zzz.protodeps
-proto:
+.PHONY: testpb
+testpb: zzz.protodeps
+testpb:
 	cd internal/bridgetest/testpb && buf generate

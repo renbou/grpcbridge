@@ -7,6 +7,7 @@ import (
 	"github.com/renbou/grpcbridge/internal/bridgetest/testpb"
 	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
+	"go.uber.org/goleak"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -14,7 +15,7 @@ import (
 const ctJson = "application/json"
 
 func mustTranscodedTestSvc(t *testing.T) (*testpb.TestService, *routing.PatternRouter, *transcoding.StandardTranscoder) {
-	testsvc := new(testpb.TestService)
+	testsvc := testpb.NewTestService()
 
 	server, pool, _ := bridgetest.MustGRPCServer(t, func(s *grpc.Server) {
 		testpb.RegisterTestServiceServer(s, testsvc)
@@ -37,4 +38,8 @@ func mustTranscodedTestSvc(t *testing.T) (*testpb.TestService, *routing.PatternR
 
 func unmarshalJSON(b []byte, msg proto.Message) error {
 	return transcoding.DefaultJSONMarshaler.Unmarshal(testpb.TestServiceTypesResolver, b, msg.ProtoReflect(), nil)
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
 }

@@ -12,9 +12,11 @@ import (
 	"github.com/lxzan/gws"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
+	"github.com/renbou/grpcbridge/internal/rpcutil"
 	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -32,6 +34,18 @@ const gwsStreamKey = "grpcbridge\x00request"
 type TranscodedWebSocketBridgeOpts struct {
 	// Logs are discarded by default.
 	Logger bridgelog.Logger
+
+	// If not set, the default [transcoding.StandardTranscoder] is created with default options.
+	Transcoder transcoding.HTTPTranscoder
+
+	// If not set, the default [grpcadapter.ProxyForwarder] is created with default options.
+	Forwarder grpcadapter.Forwarder
+
+	// MetadataParam specifies the name of the query parameter to be parsed as a map containing the metadata to be forwarded.
+	// This is needed for WebSockets since there's no way to set headers on the WebSocket handshake request through the WebSocket web API.
+	//
+	// If not set, _metadata is used. For more info about the format, see [TranscodedWebSocketBridge.ServeHTTP].
+	MetadataParam string
 }
 
 func (o TranscodedWebSocketBridgeOpts) withDefaults() TranscodedWebSocketBridgeOpts {
@@ -39,17 +53,33 @@ func (o TranscodedWebSocketBridgeOpts) withDefaults() TranscodedWebSocketBridgeO
 		o.Logger = bridgelog.Discard()
 	}
 
+	if o.Transcoder == nil {
+		o.Transcoder = transcoding.NewStandardTranscoder(transcoding.StandardTranscoderOpts{})
+	}
+
+	if o.Forwarder == nil {
+		o.Forwarder = grpcadapter.NewProxyForwarder(grpcadapter.ProxyForwarderOpts{})
+	}
+
+	if o.MetadataParam == "" {
+		o.MetadataParam = defaultMetadataParam
+	}
+
 	return o
 }
 
 type TranscodedWebSocketBridge struct {
-	logger     bridgelog.Logger
-	upgrader   *gws.Upgrader
-	router     routing.HTTPRouter
-	transcoder transcoding.HTTPTranscoder
+	logger        bridgelog.Logger
+	upgrader      *gws.Upgrader
+	router        routing.HTTPRouter
+	transcoder    transcoding.HTTPTranscoder
+	forwarder     grpcadapter.Forwarder
+	metadataParam string
 }
 
-func NewTranscodedWebSocketBridge(router routing.HTTPRouter, transcoder transcoding.HTTPTranscoder, opts TranscodedWebSocketBridgeOpts) *TranscodedWebSocketBridge {
+// NewTranscodedWebSocketBridge initializes a new [TranscodedWebSocketBridge] using the specified router and options.
+// The router isn't optional, because no routers in grpcbridge can be constructed without some form of required args.
+func NewTranscodedWebSocketBridge(router routing.HTTPRouter, opts TranscodedWebSocketBridgeOpts) *TranscodedWebSocketBridge {
 	opts = opts.withDefaults()
 	logger := opts.Logger.WithComponent("grpcbridge.web")
 
@@ -60,21 +90,25 @@ func NewTranscodedWebSocketBridge(router routing.HTTPRouter, transcoder transcod
 	})
 
 	return &TranscodedWebSocketBridge{
-		logger:     logger,
-		upgrader:   upgrader,
-		router:     router,
-		transcoder: transcoder,
+		logger:        logger,
+		upgrader:      upgrader,
+		router:        router,
+		transcoder:    opts.Transcoder,
+		forwarder:     opts.Forwarder,
+		metadataParam: opts.MetadataParam,
 	}
 }
 
 func (b *TranscodedWebSocketBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *http.Request) {
+	md := parseMetadataQuery(r, b.metadataParam)
+
 	req := routeTranscodedRequest(unwrappedRW, r, b.router, b.transcoder)
 	if req == nil {
 		return
 	}
 
-	// We know that the request is properly routed and supported by the transcoder,
-	// lets perform a WebSocket upgrade now, and connect to the target only if everything goes well.
+	// TODO(renbou): check that only streaming requests are handled here.
+
 	socket, err := b.upgrader.Upgrade(unwrappedRW, r)
 	if err != nil {
 		// Upgrade() will write an error if Hijack() was successful, but if it wasn't,
@@ -87,23 +121,6 @@ func (b *TranscodedWebSocketBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r
 	// Always clean up the incoming socket to avoid any potential leaks.
 	defer socket.NetConn().Close()
 
-	if ok := req.connect(); !ok {
-		return
-	}
-
-	// Always clean up the outgoing streams.
-	defer req.outgoing.Close()
-
-	logger := b.logger.With(
-		"target", req.route.Target.Name,
-		"grpc.method", req.route.Method.RPCName,
-		"http.method", r.Method,
-		"http.path", r.URL.Path,
-		"http.params", req.route.PathParams,
-	)
-	logger.Debug("began handling WebSocket stream")
-	defer logger.Debug("ended handling WebSocket stream")
-
 	stream := &gwsStream{
 		socket: socket,
 		req:    req,
@@ -115,35 +132,70 @@ func (b *TranscodedWebSocketBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r
 	// ReadLoop() will exit when the stream exits due to client/server closure, or when the client closes the WebSocket.
 	socket.Session().Store(gwsStreamKey, stream)
 
+	// End of forwarding will notify ReadLoop() to exit via close(done) and WriteClose().
+	// However, ReadLoop() must also have a way to notify the forwarding proccess to handle cases where the client closes the connection.
+	// This context allows us to immediately cancel Forward() once we know no client is listening for any more responses.
+	// NB: r.Context is valid here even after Hijack() in Upgrade()
+	ctx, cancel := context.WithCancel(r.Context())
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		socket.ReadLoop()
 	}()
 
-	// r.Context is valid here even after Hijack() in Upgrade()
-	err = grpcadapter.ForwardServerToClient(r.Context(), grpcadapter.ForwardS2C{
-		Incoming: stream,
-		Outgoing: req.outgoing,
+	// Even though web clients aren't able to set metadata in headers, it's still useful to support it for other potential clients.
+	ctx = metadata.NewIncomingContext(ctx, metadata.Join(md, headersToMD(r.Header)))
+
+	logger := b.logger.With(
+		"target", req.route.Target.Name,
+		"grpc.method", req.route.Method.RPCName,
+		"http.method", r.Method,
+		"http.path", r.URL.Path,
+		"http.params", req.route.PathParams,
+	)
+	logger.Debug("began handling WebSocket stream")
+	defer logger.Debug("ended handling WebSocket stream")
+
+	err = b.forwarder.Forward(ctx, grpcadapter.ForwardParams{
+		Target:   req.route.Target,
+		Service:  req.route.Service,
 		Method:   req.route.Method,
+		Incoming: stream,
+		Outgoing: req.conn,
 	})
 
 	logger.Debug("WebSocket stream forwarding done", "error", err)
 
-	// Close the WebSocket and notify the WebSocket handler to stop processing OnMessage,
-	// if ReadLoop hasn't already exited (server error or EOF).
-	if err == nil {
-		socket.WriteClose(1000, []byte(""))
-	} else if errors.Is(err, errExpectedBinary) || errors.Is(err, errExpectedText) {
-		socket.WriteClose(1003, []byte(err.Error()))
-	} else {
-		socket.WriteClose(1001, []byte(err.Error()))
-	}
+	// Close the WebSocket and notify ReadLoop() to stop processing OnMessage, if it hasn't already.
+	code, reason := websocketError(err)
+	socket.WriteClose(code, []byte(reason))
 
 	close(stream.done) // this allows OnMessage to instantly exit
 	wg.Wait()          // just a safety measure to avoid leaks
+}
+
+func websocketError(err error) (code uint16, reason string) {
+	if err == nil {
+		return 1000, ""
+	}
+
+	code = 1001
+	if errors.Is(err, errExpectedBinary) || errors.Is(err, errExpectedText) {
+		code = 1003
+	}
+
+	if st, ok := status.FromError(err); ok {
+		// more compact form because ws has ~123 bytes limit on the reason
+		reason = fmt.Sprintf("code %s: %s", st.Code(), st.Message())
+	} else {
+		reason = err.Error()
+	}
+
+	return code, reason
 }
 
 type gwsReadEvent struct {
@@ -156,19 +208,37 @@ type gwsStream struct {
 	socket *gws.Conn
 	req    *transcodedRequest
 
-	// done is needed separately to the events channel so that a stream error
-	// can properly notify OnMessage to stop trying to send any more events,
-	// so that the ReadLoop can exit successfully.
+	// done is needed separately to the events channel so that OnMessage can be safely notified
+	// to stop trying to send any more events, so that the ReadLoop can exit successfully.
 	done   chan struct{}
 	events chan gwsReadEvent
 
-	// read is needed so that Recv() can be called multiple times for Unary methods, just as an extra safeguard.
-	// using an atomic without any mutex is fine here because Recv() and OnMessage() cannot be called concurrently.
-	read atomic.Bool
+	sendActive atomic.Bool
+	recvActive atomic.Bool
+	// used to ignore messages for unary requests
+	alreadyRead atomic.Bool
 }
 
-// TODO(renbou): support context for cancelling send when the server fails.
-func (s *gwsStream) Send(_ context.Context, msg proto.Message) error {
+func (s *gwsStream) Send(ctx context.Context, msg proto.Message) error {
+	if !s.sendActive.CompareAndSwap(false, true) {
+		panic("grpcbridge: Send() called concurrently on gwsStream")
+	}
+	defer s.sendActive.Store(false)
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- s.send(msg)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return rpcutil.ContextError(ctx.Err())
+	case err := <-errChan:
+		return err
+	}
+}
+
+func (s *gwsStream) send(msg proto.Message) error {
 	b, err := s.req.resptc.Transcode(msg)
 	if err != nil {
 		return responseTranscodingError(err)
@@ -179,6 +249,7 @@ func (s *gwsStream) Send(_ context.Context, msg proto.Message) error {
 		code = gws.OpcodeBinary
 	}
 
+	// WriteMessage will be unblocked by socket.NetConn().Close() in ServeHTTP, if not before.
 	if err := s.socket.WriteMessage(code, b); err != nil {
 		return status.Errorf(codes.Internal, "failed to write response message: %s", err)
 	}
@@ -186,37 +257,41 @@ func (s *gwsStream) Send(_ context.Context, msg proto.Message) error {
 	return nil
 }
 
-func (s *gwsStream) wantMessage() bool {
-	return s.req.route.Method.ClientStreaming || (s.req.route.Binding.RequestBodyPath != "" && !s.read.Load())
-}
-
 func (s *gwsStream) Recv(ctx context.Context, msg proto.Message) error {
+	if !s.recvActive.CompareAndSwap(false, true) {
+		panic("grpcbridge: Recv() called concurrently on unaryHTTPStream")
+	}
+	defer s.recvActive.Store(false)
+
 	var event gwsReadEvent
 
-	// Only wait for a message when a body is actually required.
-	if s.wantMessage() {
+	// Only wait for a message when an event/body is actually required.
+	if s.req.route.Method.ClientStreaming || s.req.route.Binding.RequestBodyPath != "" {
 		select {
-		case event = <-s.events:
-		case <-s.done:
-			return io.EOF
+		case ev, ok := <-s.events:
+			if !ok {
+				return io.EOF // events channel closed by OnMessage for unary requests
+			}
+			event = ev
 		case <-ctx.Done():
-			return ctx.Err()
+			return rpcutil.ContextError(ctx.Err())
 		}
-	} else if s.read.Load() {
-		return io.EOF
 	}
 
-	// set to true in both Recv() and OnMessage() to avoid relying on the atomic being instantly synced between the two goroutines.
-	s.read.Store(true)
-
-	// err written when the incoming side of the socket is closed with an error,
-	// or closed by us due to other errors, which can't really be counted as a proper client-side closure.
+	// err written when the incoming side of the socket is closed by us due to other errors,
+	// which can't really be counted as a proper client-side closure.
 	if event.err != nil {
 		return event.err
 	}
 
 	return requestTranscodingError(s.req.reqtc.Transcode(event.data, msg))
 }
+
+// WebSockets don't support headers, and they can only be returned during the upgrade, which would be just way too tedious to implement.
+func (s *gwsStream) SetHeader(md metadata.MD) {}
+
+// WebSockets don't support trailers AT ALL - there's no way to send them after the upgrade.
+func (s *gwsStream) SetTrailer(md metadata.MD) {}
 
 type gwsHandler struct {
 	gws.BuiltinEventHandler
@@ -226,10 +301,7 @@ func (b *gwsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	streamAny, _ := socket.Session().Load(gwsStreamKey)
 	stream := streamAny.(*gwsStream)
 
-	if stream.wantMessage() {
-		// set to true in both Recv() and OnMessage() to avoid relying on the atomic being instantly synced between the two goroutines.
-		stream.read.Store(true)
-	} else {
+	if !(stream.req.route.Method.ClientStreaming || (stream.req.route.Binding.RequestBodyPath != "" && stream.alreadyRead.CompareAndSwap(false, true))) {
 		return
 	}
 
@@ -250,35 +322,13 @@ func (b *gwsHandler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	}
 
 	select {
-	case stream.events <- event: // events never closed, so no panic will occur here
+	case stream.events <- event: // events closed only by OnMessage, so no panic will occur here
 	case <-stream.done:
 	}
-}
 
-// OnClose needed to handle client-side closure or some unexpected error.
-func (b *gwsHandler) OnClose(socket *gws.Conn, err error) {
-	streamAny, _ := socket.Session().Load(gwsStreamKey)
-	stream := streamAny.(*gwsStream)
-
-	var eventErr error
-
-	var closeErr *gws.CloseError
-	if errors.As(err, &closeErr) {
-		if closeErr.Code == 1000 || closeErr.Code == 0 {
-			// Normal closure by client. Code == 0 set when one wasn't specified by the client.
-			eventErr = io.EOF
-		} else {
-			// Closed by client due to error or some other reason.
-			eventErr = status.Errorf(codes.Unavailable, "WebSocket closed with non-OK status code %d and reason %q", closeErr.Code, closeErr.Reason)
-		}
-	} else {
-		// Closed by server (us), doesn't really matter what we write here.
-		eventErr = err
-	}
-
-	select {
-	case stream.events <- gwsReadEvent{err: eventErr}:
-	case <-stream.done:
+	if !stream.req.route.Method.ClientStreaming {
+		// only one instance of OnMessage can get to this statement due to the alreadyRead check above.
+		close(stream.events)
 	}
 }
 

@@ -126,9 +126,9 @@ func Test_TranscodedHTTPBridge_Errors(t *testing.T) {
 		{
 			name:        "unreadable request",
 			request:     httptest.NewRequest("POST", "/grpcbridge.internal.bridgetest.testpb.TestService/UnaryUnbound", new(brokenReader)),
-			httpCode:    http.StatusBadRequest,
+			httpCode:    http.StatusServiceUnavailable,
 			isMarshaled: true,
-			statusCode:  codes.InvalidArgument,
+			statusCode:  codes.Unavailable,
 		},
 		{
 			name:        "invalid request",

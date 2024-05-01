@@ -44,6 +44,10 @@ func NewGRPCProxy(router routing.GRPCRouter, opts ...ProxyOption) *GRPCProxy {
 		opt.applyProxy(&options)
 	}
 
+	if options.common.forwarder == nil {
+		options.common.forwarder = NewForwarder()
+	}
+
 	return &GRPCProxy{
 		logger:    options.common.logger.WithComponent("grpcbridge.proxy"),
 		router:    router,

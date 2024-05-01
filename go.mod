@@ -18,6 +18,7 @@ require (
 	github.com/agext/levenshtein v1.2.3 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
+	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/klauspost/compress v1.17.5 // indirect
 	github.com/lxzan/gws v1.8.2 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect

@@ -56,6 +56,10 @@ func NewWebBridge(router Router, opts ...BridgeOption) *WebBridge {
 		opt.applyBridge(&options)
 	}
 
+	if options.common.forwarder == nil {
+		options.common.forwarder = NewForwarder()
+	}
+
 	transcoder := transcoding.NewStandardTranscoder(options.transcoderOpts)
 
 	transcodedHTTPBridge := webbridge.NewTranscodedHTTPBridge(router, webbridge.TranscodedHTTPBridgeOpts{
@@ -132,8 +136,8 @@ type options struct {
 
 func defaultOptions() options {
 	return options{
-		logger:    bridgelog.Discard(),
-		forwarder: NewForwarder(),
+		logger: bridgelog.Discard(),
+		// forwarder no set here because it is only needed by GRPCProxy and WebBridge
 	}
 }
 

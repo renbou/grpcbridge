@@ -12,13 +12,19 @@ package webbridge
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
+	"strings"
 
-	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	grpcgw "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/renbou/grpcbridge/transcoding"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+const defaultMetadataParam = "_metadata"
 
 var (
 	contentTypeHeader        = http.CanonicalHeaderKey("Content-Type")
@@ -46,7 +52,7 @@ func (w *responseWrapper) Write(data []byte) (int, error) {
 func errorStatus(err error) (*status.Status, int) {
 	st := status.Convert(err)
 
-	respStatus := runtime.HTTPStatusFromCode(st.Code())
+	respStatus := grpcgw.HTTPStatusFromCode(st.Code())
 	if s, ok := err.(interface{ HTTPStatus() int }); ok {
 		respStatus = s.HTTPStatus()
 	}
@@ -131,4 +137,93 @@ func wrapTranscodingError(err error, defaultCode codes.Code) error {
 	}
 
 	return status.Error(defaultCode, err.Error())
+}
+
+func parseMetadataQuery(r *http.Request, param string) metadata.MD {
+	if param == "" {
+		param = defaultMetadataParam
+	}
+
+	var modified url.Values
+	var md metadata.MD
+
+	original := r.URL.Query()
+
+	for k, vals := range original {
+		// key of form param[...]
+		if !(strings.HasPrefix(k, param+"[") && strings.HasSuffix(k, "]")) {
+			continue
+		}
+
+		// matches, so we should remove it from the query
+		if modified == nil {
+			modified = maps.Clone(original)
+		}
+
+		delete(modified, k)
+
+		// ignore invalid gRPC metadata keys
+		mdKey := k[len(param)+1 : len(k)-1]
+		if !isValidMetadataKey(mdKey) {
+			continue
+		}
+
+		for _, v := range vals {
+			if !isValidMetadataValue(v) {
+				continue
+			}
+
+			if md == nil {
+				md = make(metadata.MD)
+			}
+
+			md.Append(mdKey, v)
+		}
+	}
+
+	if modified != nil {
+		r.URL.RawQuery = modified.Encode()
+	}
+
+	return md
+}
+
+// https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md
+func isValidMetadataKey(k string) bool {
+	// range over len to validate bytes, not unicode chars.
+	for i := range len(k) {
+		ch := k[i]
+
+		letter := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+		digit := ch >= '0' && ch <= '9'
+		other := ch == '_' || ch == '-' || ch == '.'
+
+		if !(letter || digit || other) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isValidMetadataValue(v string) bool {
+	for i := range len(v) {
+		ch := v[i]
+
+		if ch < 0x20 || ch > 0x7E {
+			return false
+		}
+	}
+
+	return true
+}
+
+func headersToMD(headers http.Header) metadata.MD {
+	md := make(metadata.MD)
+
+	for k, v := range headers {
+		md.Set(k, v...)
+	}
+
+	return md
 }
