@@ -216,11 +216,7 @@ func (t *standardRequestTranscoder) transcodeFunc(supportsEOF bool, reqMsg proto
 		return nil
 	}
 
-	if err := t.req.RawRequest.ParseForm(); err != nil {
-		return status.Errorf(codes.InvalidArgument, "parsing query parameters: %s", err)
-	}
-
-	if err := runtime.PopulateQueryParameters(reqMsg, t.req.RawRequest.Form, t.queryParamFilter()); err != nil {
+	if err := runtime.PopulateQueryParameters(reqMsg, t.req.RawRequest.URL.Query(), t.queryParamFilter()); err != nil {
 		return status.Errorf(codes.InvalidArgument, "parsing query parameters: %s", err)
 	}
 
@@ -316,7 +312,7 @@ func (t *standardResponseTranscoder) ContentType(_ proto.Message) (mime string, 
 	return t.marshaler.ContentType()
 }
 
-// standardRequestStreamTranscoder is a wrapper around [defaultIncomingTranscoder] for marshalers supporting streaming.
+// standardRequestStreamTranscoder is a wrapper around [standardRequestTranscoder] for marshalers supporting streaming.
 type standardRequestStreamTranscoder struct {
 	*standardRequestTranscoder
 	streamer StreamMarshaler
@@ -336,7 +332,7 @@ func (rs *standardRequestStream) Transcode(protomsg proto.Message) error {
 	return rs.transcodeFunc(true, protomsg, rs.decoder.Decode)
 }
 
-// standardResponseStreamTranscoder is a wrapper around [defaultOutgoingTranscoder] for marshalers supporting streaming.
+// standardResponseStreamTranscoder is a wrapper around [standardResponseTranscoder] for marshalers supporting streaming.
 type standardResponseStreamTranscoder struct {
 	*standardResponseTranscoder
 	streamer StreamMarshaler
