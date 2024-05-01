@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -57,7 +58,12 @@ func (cc *AdaptedClientConn) Stream(ctx context.Context, method string) (ClientS
 	}
 
 	// Create new context for the whole stream operation, and use the passed context only for the actual initialization.
-	streamCtx, cancel := context.WithCancel(context.Background())
+	streamCtx := context.Background()
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		streamCtx = metadata.NewOutgoingContext(ctx, md)
+	}
+
+	streamCtx, cancel := context.WithCancel(streamCtx)
 	wrapped := &AdaptedClientStream{
 		// guaranteed to be called by Recv/Send on failure, otherwise needs to be called by caller.
 		// we initialize it here because the initial NewStream() can also fail and execute Close().
