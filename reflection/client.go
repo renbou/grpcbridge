@@ -131,6 +131,7 @@ func (c *client) execFileDescriptorRequests(requests []*reflectionpb.ServerRefle
 	defer wg.Wait()
 
 	// single base context to cancel both goroutines when one fails
+	// this is done specifically after the wg.Wait defer for cancel() to run before waiting
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

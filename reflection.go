@@ -183,7 +183,7 @@ func WithReflectionPollInterval(interval time.Duration) RouterOption {
 // For more granular control over when re-resolving happens, [reflection.ResolverBuilder] should be used to manually create resolvers.
 func WithDisabledReflectionPolling() RouterOption {
 	return newFuncRouterOption(func(o *routerOptions) {
-		o.resolverOpts.PollInterval = 0
+		o.resolverOpts.PollManually = true
 	})
 }
 
