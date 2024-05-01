@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/renbou/grpcbridge/bridgelog"
+	"github.com/renbou/grpcbridge/grpcadapter"
 	"github.com/renbou/grpcbridge/internal/ascii"
 	"github.com/renbou/grpcbridge/routing"
 	"github.com/renbou/grpcbridge/transcoding"
@@ -16,6 +17,7 @@ var _ = slog.Logger{}
 // Option configures common grpcbridge options, such as the logger.
 type Option interface {
 	RouterOption
+	ForwarderOption
 	ProxyOption
 	BridgeOption
 }
@@ -34,6 +36,11 @@ type BridgeOption interface {
 }
 
 // WebBridge provides a single entrypoint for all web-originating requests which are bridged to target gRPC services with various applied transformations.
+// It uses a [Router] which combines gRPC and HTTP routing to support both typical REST-like API (HTTP, WebSockets, Server-Sent Events), and modern gRPC-Web APIs.
+// Meanwhile, forwarding of all incoming requests is performed using a [Forwarder], which can be shared with [GRPCProxy] in order to unify how all outgoing gRPC streams are run.
+//
+// WebBridge itself is no more than a thin wrapper around various handlers from the [webbridge] package, multiplexing incoming requests to the appropriate
+// router based on headers such as Content-Type, Connection, and Upgrade. For more info, see the [WebBridge.ServeHTTP] method.
 type WebBridge struct {
 	transcodedHTTPBridge      *webbridge.TranscodedHTTPBridge
 	transcodedWebSocketBridge *webbridge.TranscodedWebSocketBridge
@@ -50,8 +57,18 @@ func NewWebBridge(router Router, opts ...BridgeOption) *WebBridge {
 	}
 
 	transcoder := transcoding.NewStandardTranscoder(options.transcoderOpts)
-	transcodedHTTPBridge := webbridge.NewTranscodedHTTPBridge(router, transcoder, webbridge.TranscodedHTTPBridgeOpts{Logger: options.common.logger})
-	transcodedWebSocketBridge := webbridge.NewTranscodedWebSocketBridge(router, transcoder, webbridge.TranscodedWebSocketBridgeOpts{Logger: options.common.logger})
+
+	transcodedHTTPBridge := webbridge.NewTranscodedHTTPBridge(router, webbridge.TranscodedHTTPBridgeOpts{
+		Logger:     options.common.logger,
+		Transcoder: transcoder,
+		Forwarder:  options.common.forwarder,
+	})
+
+	transcodedWebSocketBridge := webbridge.NewTranscodedWebSocketBridge(router, webbridge.TranscodedWebSocketBridgeOpts{
+		Logger:     options.common.logger,
+		Transcoder: transcoder,
+		Forwarder:  options.common.forwarder,
+	})
 
 	return &WebBridge{transcodedHTTPBridge: transcodedHTTPBridge, transcodedWebSocketBridge: transcodedWebSocketBridge}
 }
@@ -97,12 +114,27 @@ func WithLogger(logger bridgelog.Logger) Option {
 	})
 }
 
+// WithForwarder configures the gRPC call forwarder to be used by [GRPCProxy] or [WebBridge].
+// By default each of these components would create their own [Forwarder] with default options.
+//
+// The default grpcbridge [Forwarder] can be customized using [ForwarderOption]s,
+// and passed using this option to [NewGRPCProxy] or [NewWebBridge].
+func WithForwarder(forwarder grpcadapter.Forwarder) Option {
+	return newFuncOption(func(o *options) {
+		o.forwarder = forwarder
+	})
+}
+
 type options struct {
-	logger bridgelog.Logger
+	logger    bridgelog.Logger
+	forwarder grpcadapter.Forwarder
 }
 
 func defaultOptions() options {
-	return options{logger: bridgelog.Discard()}
+	return options{
+		logger:    bridgelog.Discard(),
+		forwarder: NewForwarder(),
+	}
 }
 
 type funcOption struct {
@@ -118,6 +150,10 @@ func (f *funcOption) applyProxy(o *proxyOptions) {
 }
 
 func (f *funcOption) applyBridge(o *bridgeOptions) {
+	f.f(&o.common)
+}
+
+func (f *funcOption) applyForwarder(o *forwarderOptions) {
 	f.f(&o.common)
 }
 

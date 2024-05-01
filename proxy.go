@@ -7,6 +7,7 @@ import (
 	"github.com/renbou/grpcbridge/grpcadapter"
 	"github.com/renbou/grpcbridge/routing"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -20,15 +21,22 @@ type ProxyOption interface {
 // GRPCProxy is a basic gRPC proxy implementation which uses a [routing.GRPCRouter] to route incoming gRPC requests
 // to the proper target services. It should be registered with a [grpc.Server] as a [grpc.UnknownServiceHandler],
 // which is precisely what the [GRPCProxy.AsServerOption] helper method returns.
+//
 // This way of routing is used instead of relying on the [grpc.ServiceRegistrar] interface because
 // GRPCProxy supports dynamic routing, which is not possible with a classic gRPC service, since it expects
 // all gRPC services to be registered before launch.
+//
+// Actual forwarding of routed calls is performed using a [Forwarder], which is a separate entity so that it can be
+// easily shared between the both GRPCProxy and [WebBridge].
 type GRPCProxy struct {
-	logger bridgelog.Logger
-	router routing.GRPCRouter
+	logger    bridgelog.Logger
+	router    routing.GRPCRouter
+	forwarder grpcadapter.Forwarder
 }
 
 // NewGRPCProxy constructs a new [*GRPCProxy] with the given router and options. When no options are provided, sane defaults are used.
+// The router is the only required parameter because without it there is no way to figure out over which gRPC connection requests must be proxied.
+// By default, a new [Forwarder] is created with default options, but [WithForwarder] can be used to specify a custom call forwarder.
 func NewGRPCProxy(router routing.GRPCRouter, opts ...ProxyOption) *GRPCProxy {
 	options := defaultProxyOptions()
 
@@ -37,8 +45,9 @@ func NewGRPCProxy(router routing.GRPCRouter, opts ...ProxyOption) *GRPCProxy {
 	}
 
 	return &GRPCProxy{
-		logger: options.common.logger.WithComponent("grpcbridge.proxy"),
-		router: router,
+		logger:    options.common.logger.WithComponent("grpcbridge.proxy"),
+		router:    router,
+		forwarder: options.common.forwarder,
 	}
 }
 
@@ -57,23 +66,16 @@ func (s *GRPCProxy) StreamHandler(_ any, incoming grpc.ServerStream) error {
 		return err
 	}
 
-	// TODO(renbou): timeouts for stream initiation and Recv/Sends
-	outgoing, err := conn.Stream(incoming.Context(), route.Method.RPCName)
-	if err != nil {
-		return err
-	}
-
-	// Always clean up the outgoing stream by explicitly closing it.
-	defer outgoing.Close()
-
 	logger := s.logger.With("target", route.Target.Name, "grpc.method", route.Method.RPCName)
 	logger.Debug("began proxying gRPC stream")
 	defer logger.Debug("ended proxying gRPC stream")
 
-	return grpcadapter.ForwardServerToClient(incoming.Context(), grpcadapter.ForwardS2C{
+	return s.forwarder.Forward(incoming.Context(), grpcadapter.ForwardParams{
+		Target:   route.Target,
+		Service:  route.Service,
 		Method:   route.Method,
 		Incoming: grpcServerStream{incoming},
-		Outgoing: outgoing,
+		Outgoing: conn,
 	})
 }
 
@@ -87,6 +89,14 @@ func (s grpcServerStream) Recv(_ context.Context, msg proto.Message) error {
 
 func (s grpcServerStream) Send(_ context.Context, msg proto.Message) error {
 	return s.ServerStream.SendMsg(msg)
+}
+
+func (s grpcServerStream) SetHeader(md metadata.MD) {
+	_ = s.ServerStream.SetHeader(md)
+}
+
+func (s grpcServerStream) SetTrailer(md metadata.MD) {
+	s.ServerStream.SetTrailer(md)
 }
 
 type proxyOptions struct {
