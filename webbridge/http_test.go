@@ -14,6 +14,7 @@ import (
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -34,13 +35,10 @@ func (br *brokenReader) Read([]byte) (int, error) {
 func Test_TranscodedHTTPBridge_Unary(t *testing.T) {
 	t.Parallel()
 
-	wantRequest := &testpb.Scalars{
-		StringValue:  "stttrrr",
-		Fixed64Value: 4242,
-		BytesValue:   []byte("byteesssss"),
+	baseRequest := func() *http.Request {
+		return httptest.NewRequest("POST", "/service/unary/stttrrr/4242", strings.NewReader(`"`+base64.StdEncoding.EncodeToString([]byte("byteesssss"))+`"`))
 	}
-
-	wantResponse := &testpb.Combined{
+	baseResponse := testpb.PrepareResponse(&testpb.Combined{
 		Scalars: nil,
 		NonScalars: &testpb.NonScalars{
 			Str2StrMap: map[string]string{
@@ -48,38 +46,88 @@ func Test_TranscodedHTTPBridge_Unary(t *testing.T) {
 				"key2": "value2",
 			},
 		},
+	}, nil)
+	baseWantRequest := &testpb.Scalars{
+		StringValue:  "stttrrr",
+		Fixed64Value: 4242,
+		BytesValue:   []byte("byteesssss"),
 	}
 
-	// Arrange
-	testsvc, bridge := mustTranscodedHTTPBridge(t)
-	testsvc.UnaryBoundResponse = testpb.PrepareResponse(wantResponse, nil)
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest("POST", "/service/unary/stttrrr/4242", strings.NewReader(`"`+base64.StdEncoding.EncodeToString([]byte("byteesssss"))+`"`))
-
-	// Act
-	bridge.ServeHTTP(recorder, request)
-
-	// Assert
-	if diff := cmp.Diff(wantRequest, testsvc.UnaryBoundRequest, protocmp.Transform()); diff != "" {
-		t.Errorf("TestService.UnaryBound() received request differing from expected (-want+got):\n%s", diff)
+	tests := []struct {
+		name         string
+		request      *http.Request
+		response     *testpb.PreparedResponse[*testpb.Combined]
+		wantRequest  *testpb.Scalars
+		wantResponse proto.Message
+		wantStatus   int
+	}{
+		{
+			name:         "basic",
+			request:      baseRequest(),
+			response:     baseResponse,
+			wantRequest:  baseWantRequest,
+			wantResponse: baseResponse.Response,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name:         "error",
+			request:      baseRequest(),
+			response:     testpb.PrepareResponse[*testpb.Combined](nil, status.Errorf(codes.AlreadyExists, "already exists")),
+			wantRequest:  baseWantRequest,
+			wantResponse: &spb.Status{Code: int32(codes.AlreadyExists), Message: "already exists"},
+			wantStatus:   http.StatusConflict,
+		},
+		{
+			name: "timeout",
+			request: func() *http.Request {
+				r := baseRequest()
+				r.Header.Set("Grpc-Timeout", "1n") // 1 nanosecond will surely time out
+				return r
+			}(),
+			response:     baseResponse,
+			wantRequest:  nil,
+			wantResponse: &spb.Status{Code: int32(codes.DeadlineExceeded), Message: "context deadline exceeded"},
+			wantStatus:   http.StatusGatewayTimeout,
+		},
 	}
 
-	if recorder.Code != http.StatusOK {
-		t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned unexpected non-ok response code = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if contentType := recorder.Result().Header.Get(contentTypeHeader); contentType != ctJson {
-		t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned unexpected content type = %q, want %q", contentType, ctJson)
-	}
+			// Arrange
+			testsvc, bridge := mustTranscodedHTTPBridge(t)
+			testsvc.UnaryBoundResponse = tt.response
+			recorder := httptest.NewRecorder()
 
-	gotResponse := new(testpb.Combined)
-	if err := unmarshalJSON(recorder.Body.Bytes(), gotResponse); err != nil {
-		t.Fatalf("TranscodedHTTPBridge.ServeHTTP() returned invalid response, failed to unmarshal: %s", err)
-	}
+			// Act
+			bridge.ServeHTTP(recorder, tt.request)
 
-	if diff := cmp.Diff(wantResponse, gotResponse, protocmp.Transform()); diff != "" {
-		t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned response differing from expected (-want+got):\n%s", diff)
+			// Assert
+			// wantRequest is nil if it isn't meant to arrive to the actual gRPC server.
+			if tt.wantRequest != nil {
+				if diff := cmp.Diff(tt.wantRequest, testsvc.UnaryBoundRequest, protocmp.Transform()); diff != "" {
+					t.Errorf("TestService.UnaryBound() received request differing from expected (-want+got):\n%s", diff)
+				}
+			}
+
+			if recorder.Code != tt.wantStatus {
+				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned unexpected status code = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+
+			if contentType := recorder.Result().Header.Get(contentTypeHeader); contentType != ctJson {
+				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned unexpected content type = %q, want %q", contentType, ctJson)
+			}
+
+			gotResponse := tt.wantResponse.ProtoReflect().New().Interface()
+			if err := unmarshalJSON(recorder.Body.Bytes(), gotResponse); err != nil {
+				t.Fatalf("TranscodedHTTPBridge.ServeHTTP() returned invalid response, failed to unmarshal: %s", err)
+			}
+
+			if diff := cmp.Diff(tt.wantResponse, gotResponse, protocmp.Transform()); diff != "" {
+				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned response differing from expected (-want+got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -158,7 +206,7 @@ func Test_TranscodedHTTPBridge_Errors(t *testing.T) {
 
 			// Assert
 			if recorder.Code != tt.httpCode {
-				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned response code = %d, want %d", recorder.Code, tt.httpCode)
+				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned status code = %d, want %d", recorder.Code, tt.httpCode)
 			}
 
 			if !tt.isMarshaled {

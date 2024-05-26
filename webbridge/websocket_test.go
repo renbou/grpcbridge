@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -70,27 +72,41 @@ type wsFlow_Close struct {
 	code int
 }
 
+func dialWebSocket(wsURLStr string, values url.Values) (*websocket.Conn, *http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	wsURL, err := url.Parse(wsURLStr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("url.Parse(%s) returned non-nil error = %q", wsURLStr, err)
+	}
+
+	query := wsURL.Query()
+	for k, v := range values {
+		query[k] = v
+	}
+	wsURL.RawQuery = query.Encode()
+
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), nil)
+	if err != nil {
+		return nil, resp, fmt.Errorf("websocket.DialContext(%s) returned non-nil error = %q", wsURL.String(), err)
+	}
+
+	return conn, resp, nil
+}
+
 func webSocketFlowTest(t *testing.T, wsURLStr string, clientFlow []wsFlow, serverFlowID string) {
 	t.Helper()
 
 	// Arrange
 	// Set up flow on the test server, initiate websocket upgrade.
 	// This should land us in the actual Forward() call, and we can start testing the flow execution.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-
-	wsURL, err := url.Parse(wsURLStr)
-	if err != nil {
-		t.Fatalf("url.Parse(%s) returned non-nil error = %q", wsURLStr, err)
-	}
-
-	query := wsURL.Query()
+	query := make(url.Values)
 	query.Set(fmt.Sprintf("%s[%s]", defaultMetadataParam, testpb.FlowMetadataKey), serverFlowID)
-	wsURL.RawQuery = query.Encode()
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), nil)
+	conn, _, err := dialWebSocket(wsURLStr, query)
 	if err != nil {
-		t.Fatalf("websocket.DialContext(%s) returned non-nil error = %q", wsURL.String(), err)
+		t.Fatalf("dialWebSocket(%s) returned non-nil error = %q", wsURLStr, err)
 	}
 
 	defer conn.Close()
@@ -130,7 +146,7 @@ func webSocketFlowTest(t *testing.T, wsURLStr string, clientFlow []wsFlow, serve
 				if !errors.As(err, &closeErr) {
 					t.Fatalf("ExpectClose (%d/%d): received error %q of type = %T, expected CloseError", ii, len(clientFlow), err, err)
 				} else if closeErr.Code != v.code {
-					t.Fatalf("ExpectClose (%d/%d): received close code = %d, want %d", ii, len(clientFlow), closeErr.Code, v.code)
+					t.Fatalf("ExpectClose (%d/%d): received close code = %d (reason = %q), want %d", ii, len(clientFlow), closeErr.Code, closeErr.Text, v.code)
 				} else if !strings.Contains(closeErr.Text, v.reason) {
 					t.Fatalf("ExpectClose (%d/%d): received close reason = %q, want %q", ii, len(clientFlow), closeErr.Text, v.reason)
 				}
@@ -272,20 +288,74 @@ func Test_TranscodedWebSocketBridge_ServerStream(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	// Arrange
+	testsvc, bridge := mustTranscodedWebSocketBridge(t)
+	server := httptest.NewServer(bridge)
+	t.Cleanup(server.Close)
 
-			// Arrange
-			testsvc, bridge := mustTranscodedWebSocketBridge(t)
+	// Run in non-parallel subtest so that server.Stop() runs AFTER all the subtests.
+	t.Run("cases", func(t *testing.T) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				webSocketFlowTest(t, wsTestURL(server.URL, tt.endpoint), tt.clientFlow, testsvc.AddFlow(tt.serverFlow))
+			})
+		}
+	})
+}
 
-			flowID := testsvc.AddFlow(tt.serverFlow)
+// Test_TranscodedWebSocketBridge_404 tests how TranscodedWebSocketBridge.ServeHTTP handles WebSocket upgrades on non-existent routes.
+func Test_TranscodedWebSocketBridge_404(t *testing.T) {
+	t.Parallel()
 
-			server := httptest.NewServer(bridge)
-			defer server.Close()
+	// Arrange
+	_, bridge := mustTranscodedWebSocketBridge(t)
+	server := httptest.NewServer(bridge)
+	t.Cleanup(server.Close)
 
-			// Act & Assert
-			webSocketFlowTest(t, wsTestURL(server.URL, tt.endpoint), tt.clientFlow, flowID)
-		})
+	// Act
+	conn, resp, err := dialWebSocket(wsTestURL(server.URL, "/notaroute"), url.Values{})
+
+	// Assert
+	if err == nil {
+		conn.Close()
+		t.Fatalf("dialWebSocket() got nil error for non-existent route")
+	}
+
+	if resp == nil {
+		t.Fatalf("dialWebSocket() got nil response on non-existent route")
+	} else if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("dialWebSocket() got response with status code = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
+func Test_TranscodedWebSocketBridge_UpgradeError(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	// Real server needed because recorder doesn't support hijacking.
+	_, bridge := mustTranscodedWebSocketBridge(t)
+	server := httptest.NewServer(bridge)
+	t.Cleanup(server.Close)
+
+	// Act
+	req, err := http.NewRequest("GET", server.URL+"/flow/server", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() returned non-nil error = %q", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /flow/server returned non-nil error = %q", err)
+	}
+
+	t.Cleanup(func() {
+		io.ReadAll(resp.Body)
+		resp.Body.Close()
+	})
+
+	// Assert
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("TranscodedWebSocketBridge.ServeHTTP() returned status code = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
 }
