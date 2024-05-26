@@ -72,7 +72,6 @@ func (pf *ProxyForwarder) Forward(ctx context.Context, params ForwardParams) err
 	// Request metadata to be forwarded in the initial call.
 	md, _ := metadata.FromIncomingContext(ctx)
 	md = pf.filter.FilterRequestMD(md)
-	ctx = metadata.NewOutgoingContext(ctx, md)
 
 	// wg.Wait deferred before cancel() and Close() to ensure that all potential resources have
 	// been notified to stop and return, so that wg.Wait can end.
@@ -81,7 +80,7 @@ func (pf *ProxyForwarder) Forward(ctx context.Context, params ForwardParams) err
 
 	// This context is used as the base context for the whole forwarding process, including the forwarding goroutines.
 	// However, we don't wait for them to actually exit, because ServerStream operations can still block until the server handler returns.
-	// TODO(renbou): support timeout here for unary calls.
+	// TODO(renbou): support setting default timeout here for unary calls.
 	ctx, cancel := pf.baseContext(ctx, md)
 	defer cancel()
 
@@ -156,18 +155,22 @@ func (pf *ProxyForwarder) Forward(ctx context.Context, params ForwardParams) err
 }
 
 func (pf *ProxyForwarder) baseContext(ctx context.Context, md metadata.MD) (context.Context, context.CancelFunc) {
-	if v := md.Get("grpc-timeout"); len(v) > 0 {
+	if v := md.Get(metadataTimeout); len(v) > 0 {
+		md.Delete(metadataTimeout)
+
 		if d, ok := decodeTimeout(v[0]); ok {
+			ctx = metadata.NewOutgoingContext(ctx, md)
 			ctx, cancel := context.WithTimeout(ctx, d)
 			return ctx, cancel
 		}
 	}
 
+	ctx = metadata.NewOutgoingContext(ctx, md)
 	return context.WithCancel(ctx)
 }
 
 func (pf *ProxyForwarder) stream(ctx context.Context, params *ForwardParams) (ClientStream, error) {
-	// TODO(renbou): support stream initiation timeout.
+	// TODO(renbou): support setting default stream initiation timeout.
 	outgoing, err := params.Outgoing.Stream(ctx, params.Method.RPCName)
 	if err != nil {
 		return nil, err
