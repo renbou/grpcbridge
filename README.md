@@ -1,1 +1,1 @@
-[![codecov](https://codecov.io/gh/renbou/grpcbridge/graph/badge.svg?token=47BTVLXJC4)](https://codecov.io/gh/renbou/grpcbridge)
+[![codecov](https://codecov.io/gh/renbou/grpcbridge/graph/badge.svg?token=47BTVLXJC4)](https://codecov.io/gh/renbou/grpcbridge) ![tests](https://github.com/renbou/grpcbridge/actions/workflows/tests.yml/badge.svg) ![lint](https://github.com/renbou/grpcbridge/actions/workflows/lint.yml/badge.svg)
