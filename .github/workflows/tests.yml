@@ -1,5 +1,5 @@
-name: Coverage
-run-name: Coverage for ${{ github.ref_name }} by @${{ github.actor }}
+name: Tests
+run-name: Tests for ${{ github.ref_name }} by @${{ github.actor }}
 on:
   pull_request:
     branches:

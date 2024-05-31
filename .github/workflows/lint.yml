@@ -1,0 +1,27 @@
+name: Lint
+run-name: Lint for ${{ github.ref_name }} by @${{ github.actor }}
+permissions:
+  contents: read
+  checks: write
+on:
+  pull_request:
+    branches:
+      - "main"
+  push:
+    branches:
+      - "main"
+jobs:
+  cover:
+    runs-on: ubuntu-latest
+    name: golangci-lint action
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59.0
