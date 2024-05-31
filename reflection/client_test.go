@@ -324,8 +324,8 @@ func test_client_listServiceNames_SendErrors(t *testing.T, clientFunc func(t *te
 	_, err := client.listServiceNames()
 
 	// Assert
-	if !errors.Is(err, io.EOF) {
-		t.Errorf("listServiceNames() returned error = %q, want io.EOF due to closed connection", err)
+	if cmpErr := bridgetest.StatusCodeIs(err, codes.Canceled); cmpErr != nil {
+		t.Errorf("listServiceNames() returned error = %q with unexpected status: %s", err, cmpErr)
 	}
 }
 

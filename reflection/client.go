@@ -2,7 +2,9 @@ package reflection
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -55,15 +57,20 @@ func (c *client) listServiceNames() ([]string, error) {
 	defer cancel()
 
 	// NB: if this returns an error, the stream is successfully closed.
-	if err := c.stream.Send(ctx, &reflectionpb.ServerReflectionRequest{
+	err := c.stream.Send(ctx, &reflectionpb.ServerReflectionRequest{
 		MessageRequest: &reflectionpb.ServerReflectionRequest_ListServices{},
-	}); err != nil {
+	})
+	isEOF := errors.Is(err, io.EOF)
+
+	if err != nil && !isEOF {
 		return nil, fmt.Errorf("sending ListServices request: %w", err)
 	}
 
 	resp := new(reflectionpb.ServerReflectionResponse)
 	if err := c.recv(ctx, resp); err != nil {
 		return nil, fmt.Errorf("receiving response to ListServices request: %w", err)
+	} else if isEOF {
+		return nil, errors.New("misbehaving ClientStream, Recv returned nil error after getting io.EOF from Send")
 	}
 
 	// sanity check to ensure that the response is valid
