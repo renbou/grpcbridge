@@ -1,0 +1,6 @@
+issues:
+  exclude-rules:
+    # grpcbridge needs v1alpha to support all reflection versions in servers.
+    - linters:
+        - staticcheck
+      text: "proto file grpc/reflection/v1alpha/reflection.proto is marked as deprecated"

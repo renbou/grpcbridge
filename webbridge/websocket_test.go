@@ -161,7 +161,9 @@ func webSocketFlowTest(t *testing.T, wsURLStr string, clientFlow []wsFlow, serve
 			time.Sleep(v.duration)
 		case *wsFlow_Close:
 			// don't forcefully close the underlying network connection to test that the websocket handler properly handles such cases
-			conn.WriteControl(websocket.CloseMessage, []byte(""), time.Time{})
+			if err := conn.WriteControl(websocket.CloseMessage, []byte(""), time.Time{}); err != nil {
+				t.Fatalf("Close (%d/%d): conn.WriteControl() returned non-nil error = %q", ii, len(clientFlow), err)
+			}
 		default:
 			t.Fatalf("Client flow action %d/%d is of unrecognized type %T", ii, len(clientFlow), action)
 		}
@@ -350,7 +352,7 @@ func Test_TranscodedWebSocketBridge_UpgradeError(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		io.ReadAll(resp.Body)
+		_, _ = io.ReadAll(resp.Body)
 		resp.Body.Close()
 	})
 

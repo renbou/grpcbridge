@@ -83,7 +83,9 @@ func mainImpl() error {
 	defer cancel()
 
 	grpcServer.Stop()
-	httpServer.Shutdown(ctx)
+	if err := httpServer.Shutdown(ctx); err != nil {
+		logger.Error("encountered unexpected error while shutting down HTTP server", "error", err)
+	}
 
 	return nil
 }

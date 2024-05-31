@@ -83,7 +83,7 @@ func transcodeError(w *responseWrapper, t transcoding.HTTPResponseTranscoder, er
 	}
 
 	w.WriteHeader(respStatus)
-	w.Write(respData)
+	_, _ = w.Write(respData)
 }
 
 func writeError(w *responseWrapper, r *http.Request, t transcoding.HTTPResponseTranscoder, err error) {

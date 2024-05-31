@@ -222,7 +222,9 @@ func Test_JSONMarshaler_Marshal(t *testing.T) {
 			actualData, marshalErr := marshaler.Marshal(testpb.TestServiceTypesResolver, tt.message.ProtoReflect(), tt.field)
 
 			var actual any
-			json.Unmarshal(actualData, &actual)
+			if err := json.Unmarshal(actualData, &actual); err != nil {
+				t.Fatalf("Marshal() returned invalid marshaled message, json.Unmarshal returned non-nil error = %q", err)
+			}
 
 			// Assert
 			if marshalErr != nil {
@@ -718,8 +720,8 @@ func Test_JSONDecoder_Decode(t *testing.T) {
 	wantB := &testpb.Scalars{Int64Value: 123}
 
 	// Act
-	decoder.Decode(msgA.ProtoReflect(), scalarFields.ByName("bool_value"))
-	decoder.Decode(msgB.ProtoReflect(), scalarFields.ByName("int64_value"))
+	_ = decoder.Decode(msgA.ProtoReflect(), scalarFields.ByName("bool_value"))
+	_ = decoder.Decode(msgB.ProtoReflect(), scalarFields.ByName("int64_value"))
 
 	// Assert
 	if diff := cmp.Diff(wantA, msgA, protoCmp()); diff != "" {
