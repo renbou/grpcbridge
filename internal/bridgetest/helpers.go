@@ -10,8 +10,8 @@ import (
 
 // StatusCodeIs checks that the error has the specified gRPC status code.
 func StatusCodeIs(err error, wantCode codes.Code) error {
-	if gotCode := status.Code(err); gotCode != wantCode {
-		return fmt.Errorf("got status code = %s, want %s", gotCode, wantCode)
+	if gotStatus := status.Convert(err); gotStatus.Code() != wantCode {
+		return fmt.Errorf("got status code = %s (message = %q), want %s", gotStatus.Code(), gotStatus.Message(), wantCode)
 	}
 
 	return nil
@@ -24,7 +24,7 @@ func StatusIs(err error, wantStatus *status.Status) error {
 	}
 
 	if gotStatus := status.Convert(err); !strings.Contains(gotStatus.Message(), wantStatus.Message()) {
-		return fmt.Errorf("got status message = %q, want %q", gotStatus.Message(), wantStatus.Message())
+		return fmt.Errorf("got status message = %q (code = %s), want %q", gotStatus.Message(), gotStatus.Code(), wantStatus.Message())
 	}
 
 	return nil
