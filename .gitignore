@@ -5,3 +5,4 @@ grpcbridge.hcl
 coverage.txt
 coverage.html
 .vscode/
+dist/

@@ -1,5 +1,5 @@
-name: Publish package
-run-name: Publish package for tag ${{ github.ref_name }} by @${{ github.actor }}
+name: Publish release
+run-name: Publish release for tag ${{ github.ref_name }} by @${{ github.actor }}
 on:
   push:
     tags:
@@ -14,9 +14,9 @@ on:
 permissions:
   packages: write
 jobs:
-  package:
+  test:
     runs-on: ubuntu-latest
-    name: Test, build, and publish
+    name: Test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,6 +26,13 @@ jobs:
           go-version-file: go.mod
       - name: Run tests
         run: make testpkg
+  package:
+    runs-on: ubuntu-latest
+    name: Package and publish image
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -55,3 +62,22 @@ jobs:
           platforms: "linux/amd64,linux/arm64"
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  goreleaser:
+    runs-on: ubuntu-latest
+    name: Package and publish release
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
