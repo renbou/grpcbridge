@@ -324,7 +324,7 @@ func test_client_listServiceNames_SendErrors(t *testing.T, clientFunc func(t *te
 	_, err := client.listServiceNames()
 
 	// Assert
-	if cmpErr := bridgetest.StatusCodeIs(err, codes.Canceled); cmpErr != nil {
+	if cmpErr := bridgetest.StatusCodeOneOf(err, codes.Canceled, codes.Unavailable); cmpErr != nil {
 		t.Errorf("listServiceNames() returned error = %q with unexpected status: %s", err, cmpErr)
 	}
 }

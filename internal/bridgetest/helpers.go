@@ -17,6 +17,19 @@ func StatusCodeIs(err error, wantCode codes.Code) error {
 	return nil
 }
 
+// StatusCodeOneOf checks that the error has one of the specified gRPC status codes.
+// This is useful for checks like Canceled/Unavailable, where one of these codes is valid for a closing connection.
+func StatusCodeOneOf(err error, wantCodes ...codes.Code) error {
+	for _, wantCode := range wantCodes {
+		if StatusCodeIs(err, wantCode) == nil {
+			return nil
+		}
+	}
+
+	gotStatus := status.Convert(err)
+	return fmt.Errorf("got status code = %s (message = %q), want one of %s", gotStatus.Code(), gotStatus.Message(), wantCodes)
+}
+
 // StatusIs checks that the error matches the specified gRPC status.
 func StatusIs(err error, wantStatus *status.Status) error {
 	if codeErr := StatusCodeIs(err, wantStatus.Code()); codeErr != nil {
