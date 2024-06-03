@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -112,14 +113,26 @@ func (t *StandardTranscoder) Bind(req HTTPRequest) (HTTPRequestTranscoder, HTTPR
 		return nil, nil, err
 	}
 
+	var isSSE bool
+
 	responseMarshaler, ok := t.pickResponseMarshaler(&req)
 	if !ok {
 		responseMarshaler = requestMarshaler
+
+		if slices.Contains(req.RawRequest.Header[acceptHeader], "text/event-stream") {
+			isSSE = true
+		}
+	}
+
+	if isSSE && req.Method.ClientStreaming {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "SSE cannot be used with client streaming methods")
+	} else if isSSE && !req.Method.ServerStreaming {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "SSE needs to be used with server streaming methods")
 	}
 
 	bt := &boundTranscoder{req: req}
 	in := newRequestTranscoder(bt, requestMarshaler)
-	out := newResponseTranscoder(bt, responseMarshaler)
+	out := newResponseTranscoder(bt, responseMarshaler, isSSE)
 
 	return in, out, nil
 }
@@ -256,8 +269,8 @@ func (t *standardRequestTranscoder) ContentType() (mime string, binary bool) {
 }
 
 // newResponseTranscoder creates a new outgoing transcoder with additional streaming capabilities if the marshaler supports it.
-func newResponseTranscoder(bt *boundTranscoder, marshaler Marshaler) HTTPResponseTranscoder {
-	t := &standardResponseTranscoder{boundTranscoder: bt, marshaler: marshaler}
+func newResponseTranscoder(bt *boundTranscoder, marshaler Marshaler, isSSE bool) HTTPResponseTranscoder {
+	t := &standardResponseTranscoder{boundTranscoder: bt, marshaler: marshaler, isSSE: isSSE}
 
 	if sm, ok := marshaler.(StreamMarshaler); ok {
 		return &standardResponseStreamTranscoder{standardResponseTranscoder: t, streamer: sm}
@@ -270,6 +283,7 @@ func newResponseTranscoder(bt *boundTranscoder, marshaler Marshaler) HTTPRespons
 type standardResponseTranscoder struct {
 	*boundTranscoder
 	marshaler Marshaler
+	isSSE     bool
 }
 
 // Transcode transcodes a new request according to the rules specified in http.proto,
@@ -339,6 +353,10 @@ type standardResponseStreamTranscoder struct {
 }
 
 func (st *standardResponseStreamTranscoder) Stream(w io.Writer) TranscodedStream {
+	if st.standardResponseTranscoder.isSSE {
+		return &sseResponseStream{standardResponseTranscoder: st.standardResponseTranscoder, w: w}
+	}
+
 	return &standardResponseStream{standardResponseStreamTranscoder: st, encoder: st.streamer.NewEncoder(st.req.Target.TypeResolver, w)}
 }
 
@@ -350,6 +368,22 @@ type standardResponseStream struct {
 // Transcode is the streaming version of response transcoding which uses an Encoder instead of Marshal.
 func (rs *standardResponseStream) Transcode(protomsg proto.Message) error {
 	return rs.transcodeFunc(protomsg, rs.encoder.Encode)
+}
+
+type sseResponseStream struct {
+	*standardResponseTranscoder
+	w io.Writer
+}
+
+// Transcode implements TranscodedStream for an SSE response stream.
+func (rs *sseResponseStream) Transcode(protomsg proto.Message) error {
+	b, err := rs.standardResponseTranscoder.Transcode(protomsg)
+	if err != nil {
+		return err
+	}
+
+	_, err = rs.w.Write(slices.Concat([]byte("data:"), b, []byte("\n")))
+	return err
 }
 
 // traverseFieldPath is a bit like the path/query parameter parsing implementation in grpc-gateway,

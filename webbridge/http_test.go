@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/renbou/grpcbridge/grpcadapter"
 	"github.com/renbou/grpcbridge/internal/bridgetest/testpb"
 	spb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/grpc/codes"
@@ -20,7 +22,14 @@ import (
 
 func mustTranscodedHTTPBridge(t *testing.T) (*testpb.TestService, *TranscodedHTTPBridge) {
 	testsvc, router, transcoder := mustTranscodedTestSvc(t)
-	bridge := NewTranscodedHTTPBridge(router, TranscodedHTTPBridgeOpts{Transcoder: transcoder})
+	bridge := NewTranscodedHTTPBridge(router, TranscodedHTTPBridgeOpts{
+		Transcoder: transcoder,
+		Forwarder: grpcadapter.NewProxyForwarder(grpcadapter.ProxyForwarderOpts{
+			Filter: grpcadapter.NewProxyMDFilter(grpcadapter.ProxyMDFilterOpts{
+				AllowRequestMD: []string{testpb.FlowMetadataKey},
+			}),
+		}),
+	})
 
 	return testsvc, bridge
 }
@@ -222,5 +231,46 @@ func Test_TranscodedHTTPBridge_Errors(t *testing.T) {
 				t.Errorf("TranscodedHTTPBridge.ServeHTTP() returned status code = %s, want %s", gotStatus.Code(), tt.statusCode)
 			}
 		})
+	}
+}
+
+func Test_SSE(t *testing.T) {
+	t.Parallel()
+
+	wantStream := "data:{\"message\":\"hello\"}\ndata:{\"message\":\"world\"}\n"
+
+	// Arrange
+	testsvc, bridge := mustTranscodedHTTPBridge(t)
+
+	flowID := testsvc.AddFlow([]*testpb.FlowAction{
+		{Action: &testpb.FlowAction_SendMessage{SendMessage: &testpb.FlowMessage{Message: "hello"}}},
+		{Action: &testpb.FlowAction_SendMessage{SendMessage: &testpb.FlowMessage{Message: "world"}}},
+	})
+
+	server := httptest.NewServer(bridge)
+	t.Cleanup(server.Close)
+
+	// Act
+	req, err := http.NewRequest("GET", server.URL+"/flow/server", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() returned non-nil error = %q", err)
+	}
+
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(testpb.FlowMetadataKey, flowID)
+
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET /flow/server returned non-nil error = %q", err)
+	}
+
+	// Assert
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll() returned non-nil error = %q", err)
+	}
+
+	if diff := cmp.Diff(wantStream, string(respBody)); diff != "" {
+		t.Errorf("GET /flow/server returned unexpected body (-want+got):\n%s", diff)
 	}
 }

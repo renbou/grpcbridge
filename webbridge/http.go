@@ -86,7 +86,29 @@ func (b *TranscodedHTTPBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *htt
 		return
 	}
 
-	// TODO(renbou): check that only unary requests are handled here, at least for now.
+	if req.route.Method.ClientStreaming {
+		writeError(req.w, req.r, req.resptc, status.Errorf(codes.Unimplemented, "client streaming through HTTP not supported"))
+		return
+	}
+
+	incoming := &httpStream{w: req.w, r: r, reqtc: req.reqtc, resptc: req.resptc}
+
+	if req.route.Method.ServerStreaming {
+		streamtc, ok := req.resptc.(transcoding.ResponseStreamTranscoder)
+		if !ok {
+			writeError(req.w, req.r, req.resptc, status.Error(codes.InvalidArgument, "encoding does not support streaming"))
+			return
+		}
+
+		flusher, ok := req.w.ResponseWriter.(http.Flusher)
+		if !ok {
+			writeError(req.w, req.r, req.resptc, status.Error(codes.Internal, "server does not support streaming"))
+			return
+		}
+
+		incoming.respstream = streamtc.Stream(incoming.w)
+		incoming.flusher = flusher
+	}
 
 	logger := b.logger.With(
 		"target", req.route.Target.Name,
@@ -98,13 +120,16 @@ func (b *TranscodedHTTPBridge) ServeHTTP(unwrappedRW http.ResponseWriter, r *htt
 	logger.Debug("began handling HTTP request")
 	defer logger.Debug("ended handling HTTP request")
 
+	incoming.logger = logger
+	incoming.readCh = make(chan struct{})
+
 	ctx := metadata.NewIncomingContext(r.Context(), headersToMD(r.Header))
 
 	err := b.forwarder.Forward(ctx, grpcadapter.ForwardParams{
 		Target:   req.route.Target,
 		Service:  req.route.Service,
 		Method:   req.route.Method,
-		Incoming: &unaryHTTPStream{logger: logger, w: req.w, r: r, reqtc: req.reqtc, resptc: req.resptc, readCh: make(chan struct{})},
+		Incoming: incoming,
 		Outgoing: req.conn,
 	})
 	if err != nil {
@@ -148,13 +173,16 @@ func routeTranscodedRequest(unwrappedRW http.ResponseWriter, r *http.Request, ro
 	return req
 }
 
-type unaryHTTPStream struct {
+type httpStream struct {
 	logger bridgelog.Logger
 
-	w      *responseWrapper
-	r      *http.Request
-	reqtc  transcoding.HTTPRequestTranscoder
-	resptc transcoding.HTTPResponseTranscoder
+	w     *responseWrapper
+	r     *http.Request
+	reqtc transcoding.HTTPRequestTranscoder
+
+	resptc     transcoding.HTTPResponseTranscoder
+	respstream transcoding.TranscodedStream
+	flusher    http.Flusher
 
 	sendActive atomic.Bool
 	recvActive atomic.Bool
@@ -164,21 +192,21 @@ type unaryHTTPStream struct {
 	sent   bool // not synchronized because send() cannot be called concurrently
 }
 
-func (s *unaryHTTPStream) Send(ctx context.Context, msg proto.Message) error {
+func (s *httpStream) Send(ctx context.Context, msg proto.Message) error {
 	s.setSendActive()
 	defer s.sendActive.Store(false)
 
 	return s.withCtx(ctx, func() error { return s.send(msg) })
 }
 
-func (s *unaryHTTPStream) setSendActive() {
+func (s *httpStream) setSendActive() {
 	if !s.sendActive.CompareAndSwap(false, true) {
 		panic("grpcbridge: Send()/SetHeader()/SetTrailer() called concurrently on unaryHTTPStream")
 	}
 }
 
-func (s *unaryHTTPStream) send(msg proto.Message) error {
-	if s.sent {
+func (s *httpStream) send(msg proto.Message) error {
+	if s.sent && s.respstream == nil {
 		return status.Error(codes.Internal, "grpcbridge: tried sending second response on unary stream")
 	}
 
@@ -186,16 +214,28 @@ func (s *unaryHTTPStream) send(msg proto.Message) error {
 	// for example when using HTTP/1.1. See http.ResponseWriter.Write comment for more info.
 	<-s.readCh
 
-	b, err := s.resptc.Transcode(msg)
-	if err != nil {
-		return responseTranscodingError(err)
+	if !s.sent {
+		ct, _ := s.resptc.ContentType(msg) // don't care about whether the response is in binary/utf8
+		s.w.Header()[contentTypeHeader] = []string{ct}
 	}
 
 	// Set here, because Write can perform a partial write and still return an error
 	s.sent = true
 
-	ct, _ := s.resptc.ContentType(msg) // don't care about whether the response is in binary/utf8
-	s.w.Header()[contentTypeHeader] = []string{ct}
+	if s.respstream != nil {
+		// Use stream response instead.
+		if err := s.respstream.Transcode(msg); err != nil {
+			return responseTranscodingError(err)
+		}
+
+		s.flusher.Flush()
+		return nil
+	}
+
+	b, err := s.resptc.Transcode(msg)
+	if err != nil {
+		return responseTranscodingError(err)
+	}
 
 	if _, err = s.w.Write(b); err != nil {
 		return status.Errorf(codes.Unavailable, "failed to write response body: %s", err)
@@ -204,7 +244,7 @@ func (s *unaryHTTPStream) send(msg proto.Message) error {
 	return nil
 }
 
-func (s *unaryHTTPStream) Recv(ctx context.Context, msg proto.Message) error {
+func (s *httpStream) Recv(ctx context.Context, msg proto.Message) error {
 	if !s.recvActive.CompareAndSwap(false, true) {
 		panic("grpcbridge: Recv() called concurrently on unaryHTTPStream")
 	}
@@ -213,7 +253,7 @@ func (s *unaryHTTPStream) Recv(ctx context.Context, msg proto.Message) error {
 	return s.withCtx(ctx, func() error { return s.recv(msg) })
 }
 
-func (s *unaryHTTPStream) recv(msg proto.Message) error {
+func (s *httpStream) recv(msg proto.Message) error {
 	if s.read {
 		return io.EOF
 	}
@@ -234,7 +274,7 @@ func (s *unaryHTTPStream) recv(msg proto.Message) error {
 	return requestTranscodingError(s.reqtc.Transcode(b, msg))
 }
 
-func (s *unaryHTTPStream) SetHeader(md metadata.MD) {
+func (s *httpStream) SetHeader(md metadata.MD) {
 	s.setSendActive()
 	defer s.sendActive.Store(false)
 
@@ -246,7 +286,7 @@ func (s *unaryHTTPStream) SetHeader(md metadata.MD) {
 	s.appendHeaders(md)
 }
 
-func (s *unaryHTTPStream) SetTrailer(md metadata.MD) {
+func (s *httpStream) SetTrailer(md metadata.MD) {
 	s.setSendActive()
 	defer s.sendActive.Store(false)
 
@@ -265,14 +305,14 @@ func (s *unaryHTTPStream) SetTrailer(md metadata.MD) {
 	s.appendHeaders(md)
 }
 
-func (s *unaryHTTPStream) appendHeaders(md metadata.MD) {
+func (s *httpStream) appendHeaders(md metadata.MD) {
 	for k, v := range md {
 		k = http.CanonicalHeaderKey(k)
 		s.w.Header()[k] = append(s.w.Header()[k], v...)
 	}
 }
 
-func (s *unaryHTTPStream) withCtx(ctx context.Context, f func() error) error {
+func (s *httpStream) withCtx(ctx context.Context, f func() error) error {
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- f()
