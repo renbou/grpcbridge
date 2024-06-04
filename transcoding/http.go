@@ -196,6 +196,11 @@ type standardRequestTranscoder struct {
 // https://github.com/googleapis/googleapis/blob/bbcce1d481a148676634603794c6e697ae3b58c7/google/api/http.proto#L208.
 func (t *standardRequestTranscoder) Transcode(b []byte, protomsg proto.Message) error {
 	return t.transcodeFunc(false, protomsg, func(msg protoreflect.Message, fd protoreflect.FieldDescriptor) error {
+		// Treat completely empty bodies as valid ones.
+		if len(b) == 0 {
+			return nil
+		}
+
 		return t.marshaler.Unmarshal(t.req.Target.TypeResolver, b, msg, fd)
 	})
 }
@@ -382,7 +387,7 @@ func (rs *sseResponseStream) Transcode(protomsg proto.Message) error {
 		return err
 	}
 
-	_, err = rs.w.Write(slices.Concat([]byte("data:"), b, []byte("\n")))
+	_, err = rs.w.Write(slices.Concat([]byte("data:"), b, []byte("\n\n")))
 	return err
 }
 
@@ -398,7 +403,11 @@ func traverseFieldPath(msg protoreflect.Message, path string) (protoreflect.Mess
 
 	var fd protoreflect.FieldDescriptor
 
-	for elem, rest, _ := strings.Cut(path, fieldPathSep); elem != ""; elem, rest, _ = strings.Cut(rest, fieldPathSep) {
+	for elem, rest, foundSep := strings.Cut(path, fieldPathSep); elem != "" || foundSep; elem, rest, foundSep = strings.Cut(rest, fieldPathSep) {
+		if foundSep && elem == "" {
+			return nil, nil, fmt.Errorf("invalid path: %q contains empty element", path)
+		}
+
 		fields := msg.Descriptor().Fields()
 
 		fd = fields.ByName(protoreflect.Name(elem))

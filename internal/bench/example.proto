@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package bench;
+
+import "google/api/annotations.proto";
+
+option go_package = "github.com/renbou/grpcbridge/bench";
+
+service Bench {
+  rpc Echo(EchoMessage) returns (EchoMessage) {
+    option (google.api.http) = {
+      post: "/echo/{a}"
+      body: "c"
+    };
+  }
+}
+
+message EchoMessage {
+  string a = 1;
+  int32 b = 2;
+  repeated string c = 3;
+}

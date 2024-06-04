@@ -237,7 +237,7 @@ func Test_TranscodedHTTPBridge_Errors(t *testing.T) {
 func Test_SSE(t *testing.T) {
 	t.Parallel()
 
-	wantStream := "data:{\"message\":\"hello\"}\ndata:{\"message\":\"world\"}\n"
+	wantStream := "data:{\"message\":\"hello\"}\n\ndata:{\"message\":\"world\"}\n\n"
 
 	// Arrange
 	testsvc, bridge := mustTranscodedHTTPBridge(t)

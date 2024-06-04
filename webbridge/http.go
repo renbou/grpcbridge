@@ -45,11 +45,8 @@ func (o TranscodedHTTPBridgeOpts) withDefaults() TranscodedHTTPBridgeOpts {
 	return o
 }
 
-// TranscodedHTTPBridge is a gRPC bridge which performs transcoding between HTTP and gRPC requests/responses
-// using the specified transcoder, which isn't an optional argument by default since a single transcoder should be used
-// for the various available bridges for compatibility between them.
+// TranscodedHTTPBridge is a gRPC bridge which performs transcoding between HTTP and gRPC requests/responses using the optionally specified transcoder.
 //
-// Currently, only unary RPCs are supported, and the streaming functionality of the transcoder is not used.
 // TranscodedHTTPBridge performs transcoding not only for the request and response messages,
 // but also for the errors and statuses returned by the router, transcoder, and gRPC connection to which the RPC is bridged.
 // More specifically, gRPC status codes will be used to set an HTTP code according to the [Closest HTTP Mapping],
@@ -196,7 +193,7 @@ func (s *httpStream) Send(ctx context.Context, msg proto.Message) error {
 	s.setSendActive()
 	defer s.sendActive.Store(false)
 
-	return s.withCtx(ctx, func() error { return s.send(msg) })
+	return withCtx(ctx, func() error { return s.send(msg) })
 }
 
 func (s *httpStream) setSendActive() {
@@ -250,7 +247,7 @@ func (s *httpStream) Recv(ctx context.Context, msg proto.Message) error {
 	}
 	defer s.recvActive.Store(false)
 
-	return s.withCtx(ctx, func() error { return s.recv(msg) })
+	return withCtx(ctx, func() error { return s.recv(msg) })
 }
 
 func (s *httpStream) recv(msg proto.Message) error {
@@ -266,11 +263,6 @@ func (s *httpStream) recv(msg proto.Message) error {
 	s.read = true
 	close(s.readCh)
 
-	// Treat completely empty bodies as valid ones.
-	if len(b) == 0 {
-		return nil
-	}
-
 	return requestTranscodingError(s.reqtc.Transcode(b, msg))
 }
 
@@ -283,7 +275,7 @@ func (s *httpStream) SetHeader(md metadata.MD) {
 		return
 	}
 
-	s.appendHeaders(md)
+	appendHeaders(s.w, md)
 }
 
 func (s *httpStream) SetTrailer(md metadata.MD) {
@@ -302,17 +294,17 @@ func (s *httpStream) SetTrailer(md metadata.MD) {
 
 	// This is the path taken by unary calls if the forwarder supports it,
 	// for which we can actually send the trailers as headers.
-	s.appendHeaders(md)
+	appendHeaders(s.w, md)
 }
 
-func (s *httpStream) appendHeaders(md metadata.MD) {
+func appendHeaders(w http.ResponseWriter, md metadata.MD) {
 	for k, v := range md {
 		k = http.CanonicalHeaderKey(k)
-		s.w.Header()[k] = append(s.w.Header()[k], v...)
+		w.Header()[k] = append(w.Header()[k], v...)
 	}
 }
 
-func (s *httpStream) withCtx(ctx context.Context, f func() error) error {
+func withCtx(ctx context.Context, f func() error) error {
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- f()

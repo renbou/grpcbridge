@@ -3,6 +3,8 @@ package grpcbridge
 import (
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
@@ -44,6 +46,8 @@ type BridgeOption interface {
 type WebBridge struct {
 	transcodedHTTPBridge      *webbridge.TranscodedHTTPBridge
 	transcodedWebSocketBridge *webbridge.TranscodedWebSocketBridge
+	gRPCWebHTTPBridge         *webbridge.GRPCWebBridge
+	gRPCWebSocketBridge       *webbridge.GRPCWebSocketBridge
 }
 
 // NewWebBridge constructs a new [*WebBridge] with the given router and options.
@@ -74,16 +78,37 @@ func NewWebBridge(router Router, opts ...BridgeOption) *WebBridge {
 		Forwarder:  options.common.forwarder,
 	})
 
-	return &WebBridge{transcodedHTTPBridge: transcodedHTTPBridge, transcodedWebSocketBridge: transcodedWebSocketBridge}
+	gRPCWebHTTPBridge := webbridge.NewGRPCWebBridge(router, webbridge.GRPCWebBridgeOpts{
+		Logger:    options.common.logger,
+		Forwarder: options.common.forwarder,
+	})
+
+	gRPCWebSocketBridge := webbridge.NewGRPCWebSocketBridge(router, webbridge.GRPCWebBridgeOpts{
+		Logger:    options.common.logger,
+		Forwarder: options.common.forwarder,
+	})
+
+	return &WebBridge{transcodedHTTPBridge: transcodedHTTPBridge, transcodedWebSocketBridge: transcodedWebSocketBridge, gRPCWebHTTPBridge: gRPCWebHTTPBridge, gRPCWebSocketBridge: gRPCWebSocketBridge}
 }
 
 // ServeHTTP implements [net/http.Handler] and routes the request to the appropriate bridging handler according to these rules:
 //  1. WebSocket upgrades (Connection: Upgrade and Upgrade: WebSocket) are handled by [webbridge.TranscodedWebSocketBridge].
-//  2. All other requests are handled by [webbridge.TranscodedHTTPBridge].
+//  2. WebSocket upgrades with the Sec-WebSocket-Protocol header containing grpc-websockets are handled by [webbridge.GRPCWebSocketBridge].
+//  3. HTTP gRPC-Web (Content-Type: application/grpc-web) requests are handled by [webbridge.GRPCWebBridge].
+//  4. All other requests are handled by [webbridge.TranscodedHTTPBridge].
 func (b *WebBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Case-insensitive comparison as specified in the RFC https://datatracker.ietf.org/doc/html/rfc6455#section-4.2.1.
 	if ascii.EqualFold(r.Header.Get("Connection"), "upgrade") && ascii.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		b.transcodedWebSocketBridge.ServeHTTP(w, r)
+		if slices.Contains(r.Header.Values("Sec-WebSocket-Protocol"), "grpc-websockets") {
+			b.gRPCWebSocketBridge.ServeHTTP(w, r)
+		} else {
+			b.transcodedWebSocketBridge.ServeHTTP(w, r)
+		}
+		return
+	}
+
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc-web") {
+		b.gRPCWebHTTPBridge.ServeHTTP(w, r)
 		return
 	}
 

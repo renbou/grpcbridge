@@ -1,367 +1,339 @@
 package httprule
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
 
-// InvalidTemplateError indicates that the path template is not valid.
-type InvalidTemplateError struct {
-	tmpl string
-	msg  string
+const eof = "\u0000"
+
+type lexeme string
+
+const (
+	lexemeIdent   lexeme = "i"
+	lexemeLiteral lexeme = "l"
+	lexemeVerb    lexeme = "v"
+	lexemeEof     lexeme = "e"
+)
+
+type segment struct {
+	typ      segmentType
+	literal  string
+	variable variable
 }
 
-func (e InvalidTemplateError) Error() string {
-	return fmt.Sprintf("%s: %s", e.msg, e.tmpl)
+type segmentType int
+
+const (
+	segmentWildcard segmentType = iota
+	segmentMultiWildcard
+	segmentVariable
+	segmentLiteral
+)
+
+type variable struct {
+	fieldPath []string
+	segments  []segment
 }
 
-// Parse parses the string representation of path template
-func Parse(tmpl string) (Compiler, error) {
+// Template represents a parsed HttpRule path template.
+type Template struct {
+	tmpl     string
+	segments []segment
+	verb     string
+}
+
+// Parse parses an HttpRule path template according to the rules specified in google/api/http.proto
+// and formalized as ABNF in the file httprule.bnf in this directory.
+func Parse(tmpl string) (*Template, error) {
 	if !strings.HasPrefix(tmpl, "/") {
-		return template{}, InvalidTemplateError{tmpl: tmpl, msg: "no leading /"}
+		return nil, fmt.Errorf("template %q does not contain leading /", tmpl)
 	}
-	tokens, verb := tokenize(tmpl[1:])
 
-	p := parser{tokens: tokens}
-	segs, err := p.topLevelSegments()
+	tokens := tokenize(tmpl[1:])
+	p := &parser{
+		accepted: tokens[:0],
+		left:     tokens,
+	}
+
+	res, err := p.template()
 	if err != nil {
-		return template{}, InvalidTemplateError{tmpl: tmpl, msg: err.Error()}
+		return nil, err
 	}
 
-	return template{
-		segments: segs,
-		verb:     verb,
-		template: tmpl,
-	}, nil
+	res.tmpl = tmpl
+
+	return res, nil
 }
 
-func tokenize(path string) (tokens []string, verb string) {
-	if path == "" {
-		return []string{eof}, ""
+type parser struct {
+	accepted []string
+	left     []string
+}
+
+func (p *parser) template() (*Template, error) {
+	if _, err := p.accept(lexemeEof); err == nil {
+		return &Template{segments: []segment{{typ: segmentLiteral, literal: ""}}}, nil
 	}
 
-	const (
-		init = iota
-		field
-		nested
-	)
-	st := init
-	for path != "" {
-		var idx int
-		switch st {
-		case init:
-			idx = strings.IndexAny(path, "/{")
-		case field:
-			idx = strings.IndexAny(path, ".=}")
-		case nested:
-			idx = strings.IndexAny(path, "/}")
+	segments, _, err := p.segments()
+	if err != nil {
+		return nil, p.error()
+	}
+
+	tmpl := &Template{segments: segments}
+	last := &segments[len(segments)-1]
+
+	if last.typ == segmentLiteral {
+		// split literal into literal + verb
+		if verbIdx := strings.LastIndex(last.literal, ":"); verbIdx != -1 {
+			tmpl.verb = last.literal[verbIdx+1:]
+			last.literal = last.literal[:verbIdx]
 		}
-		if idx < 0 {
-			tokens = append(tokens, path)
+	} else if last.typ == segmentVariable && p.left[0] != eof {
+		// additionally allow a verb
+		if tmpl.verb, err = p.accept(lexemeVerb); err != nil {
+			return nil, p.error()
+		}
+	}
+
+	if _, err := p.accept(lexemeEof); err != nil {
+		return nil, p.error()
+	}
+
+	return tmpl, nil
+}
+
+func (p *parser) error() error {
+	return fmt.Errorf("unexpected token %q after segments %q", p.left[0], "/"+strings.Join(p.accepted, ""))
+}
+
+func (p *parser) segments() ([]segment, bool, error) {
+	segments := make([]segment, 0, 1)
+	multi := false
+
+	for {
+		s, ms, err := p.segment()
+		if err != nil {
+			return nil, false, err
+		}
+
+		segments = append(segments, s)
+
+		if ms {
+			// MultiSegment, MultiSegVariable
+			multi = true
 			break
 		}
-		switch r := path[idx]; r {
-		case '/', '.':
-		case '{':
-			st = field
-		case '=':
-			st = nested
-		case '}':
-			st = init
-		}
-		if idx == 0 {
-			tokens = append(tokens, path[idx:idx+1])
-		} else {
-			tokens = append(tokens, path[:idx], path[idx:idx+1])
-		}
-		path = path[idx+1:]
-	}
 
-	l := len(tokens)
-	// See
-	// https://github.com/grpc-ecosystem/grpc-gateway/pull/1947#issuecomment-774523693 ;
-	// although normal and backwards-compat logic here is to use the last index
-	// of a colon, if the final segment is a variable followed by a colon, the
-	// part following the colon must be a verb. Hence if the previous token is
-	// an end var marker, we switch the index we're looking for to Index instead
-	// of LastIndex, so that we correctly grab the remaining part of the path as
-	// the verb.
-	var penultimateTokenIsEndVar bool
-	switch l {
-	case 0, 1:
-		// Not enough to be variable so skip this logic and don't result in an
-		// invalid index
-	default:
-		penultimateTokenIsEndVar = tokens[l-2] == "}"
-	}
-	t := tokens[l-1]
-	var idx int
-	if penultimateTokenIsEndVar {
-		idx = strings.Index(t, ":")
-	} else {
-		idx = strings.LastIndex(t, ":")
-	}
-	if idx == 0 {
-		tokens, verb = tokens[:l-1], t[1:]
-	} else if idx > 0 {
-		tokens[l-1], verb = t[:idx], t[idx+1:]
-	}
-	tokens = append(tokens, eof)
-	return tokens, verb
-}
-
-// parser is a parser of the template syntax defined in github.com/googleapis/googleapis/google/api/http.proto.
-type parser struct {
-	tokens   []string
-	accepted []string
-}
-
-// topLevelSegments is the target of this parser.
-func (p *parser) topLevelSegments() ([]segment, error) {
-	if _, err := p.accept(typeEOF); err == nil {
-		p.tokens = p.tokens[:0]
-		return []segment{literal(eof)}, nil
-	}
-	segs, err := p.segments()
-	if err != nil {
-		return nil, err
-	}
-	if _, err := p.accept(typeEOF); err != nil {
-		return nil, fmt.Errorf("unexpected token %q after segments %q", p.tokens[0], strings.Join(p.accepted, ""))
-	}
-	return segs, nil
-}
-
-func (p *parser) segments() ([]segment, error) {
-	s, err := p.segment()
-	if err != nil {
-		return nil, err
-	}
-
-	segs := []segment{s}
-	for {
 		if _, err := p.accept("/"); err != nil {
-			return segs, nil
+			break
 		}
-		s, err := p.segment()
-		if err != nil {
-			return segs, err
-		}
-		segs = append(segs, s)
 	}
+
+	return segments, multi, nil
 }
 
-func (p *parser) segment() (segment, error) {
+func (p *parser) segment() (segment, bool, error) {
+	// wildcards
 	if _, err := p.accept("*"); err == nil {
-		return wildcard{}, nil
-	}
-	if _, err := p.accept("**"); err == nil {
-		return deepWildcard{}, nil
-	}
-	if l, err := p.literal(); err == nil {
-		return l, nil
+		return segment{typ: segmentWildcard}, false, nil
+	} else if _, err := p.accept("**"); err == nil {
+		return segment{typ: segmentMultiWildcard}, true, nil
 	}
 
-	v, err := p.variable()
-	if err != nil {
-		return nil, fmt.Errorf("segment neither wildcards, literal or variable: %w", err)
+	// literal
+	if l, err := p.accept(lexemeLiteral); err == nil {
+		return segment{typ: segmentLiteral, literal: l}, false, nil
 	}
-	return v, nil
+
+	// variable
+	if v, multi, err := p.variable(); err == nil {
+		return segment{typ: segmentVariable, variable: v}, multi, nil
+	}
+
+	return segment{}, false, fmt.Errorf("invalid segment: not a wildcard, literal, or variable")
 }
 
-func (p *parser) literal() (segment, error) {
-	lit, err := p.accept(typeLiteral)
-	if err != nil {
-		return nil, err
-	}
-	return literal(lit), nil
-}
-
-func (p *parser) variable() (segment, error) {
+func (p *parser) variable() (variable, bool, error) {
 	if _, err := p.accept("{"); err != nil {
-		return nil, err
+		return variable{}, false, err
 	}
 
 	path, err := p.fieldPath()
 	if err != nil {
-		return nil, err
+		return variable{}, false, fmt.Errorf("invalid field path in variable: %w", err)
 	}
 
-	var segs []segment
+	var segments []segment
+	multi := false
+
 	if _, err := p.accept("="); err == nil {
-		segs, err = p.segments()
-		if err != nil {
-			return nil, fmt.Errorf("invalid segment in variable %q: %w", path, err)
+		// note that variable inside variable is not possible thanks to tokenize
+		if segments, multi, err = p.segments(); err != nil {
+			return variable{}, false, fmt.Errorf("invalid segment in variable: %w", err)
 		}
 	} else {
-		segs = []segment{wildcard{}}
+		segments = []segment{{typ: segmentWildcard}}
 	}
 
 	if _, err := p.accept("}"); err != nil {
-		return nil, fmt.Errorf("unterminated variable segment: %s", path)
+		return variable{}, false, fmt.Errorf("unterminated variable: %w", err)
 	}
+
 	return variable{
-		path:     path,
-		segments: segs,
-	}, nil
+		fieldPath: path,
+		segments:  segments,
+	}, multi, nil
 }
 
-func (p *parser) fieldPath() (string, error) {
-	c, err := p.accept(typeIdent)
+func (p *parser) fieldPath() ([]string, error) {
+	component, err := p.accept(lexemeIdent)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	components := []string{c}
+
+	path := []string{component}
+
 	for {
 		if _, err := p.accept("."); err != nil {
-			return strings.Join(components, "."), nil
+			break
 		}
-		c, err := p.accept(typeIdent)
+
+		component, err := p.accept(lexemeIdent)
 		if err != nil {
-			return "", fmt.Errorf("invalid field path component: %w", err)
+			return nil, err
 		}
-		components = append(components, c)
+
+		path = append(path, component)
 	}
+
+	return path, nil
 }
 
-// A termType is a type of terminal symbols.
-type termType string
+func (p *parser) accept(want lexeme) (string, error) {
+	got := p.left[0]
 
-// These constants define some of valid values of termType.
-// They improve readability of parse functions.
-//
-// You can also use "/", "*", "**", "." or "=" as valid values.
-const (
-	typeIdent   = termType("ident")
-	typeLiteral = termType("literal")
-	typeEOF     = termType("$")
-)
-
-// eof is the terminal symbol which always appears at the end of token sequence.
-const eof = "\u0000"
-
-// accept tries to accept a token in "p".
-// This function consumes a token and returns it if it matches to the specified "term".
-// If it doesn't match, the function does not consume any tokens and return an error.
-func (p *parser) accept(term termType) (string, error) {
-	t := p.tokens[0]
-	switch term {
-	case "/", "*", "**", ".", "=", "{", "}":
-		if t != string(term) && t != "/" {
-			return "", fmt.Errorf("expected %q but got %q", term, t)
+	switch want {
+	case lexemeEof:
+		if got != eof {
+			return "", fmt.Errorf("expected EOF, got %q", got)
 		}
-	case typeEOF:
-		if t != eof {
-			return "", fmt.Errorf("expected EOF but got %q", t)
-		}
-	case typeIdent:
-		if err := expectIdent(t); err != nil {
+	case lexemeIdent:
+		if err := checkIdent(got); err != nil {
 			return "", err
 		}
-	case typeLiteral:
-		if err := expectPChars(t); err != nil {
+	case lexemeLiteral:
+		if err := checkLiteral(got); err != nil {
 			return "", err
 		}
-	default:
-		return "", fmt.Errorf("unknown termType %q", term)
+	case lexemeVerb:
+		if err := checkLiteral(got); err != nil {
+			return "", err
+		}
+
+		if !strings.HasPrefix(got, ":") {
+			return "", fmt.Errorf("verb %q does not start with colon", got)
+		}
+
+		got = got[1:]
+	case "/", "*", "**", ".", "=", "{", "}", ":":
+		if got != string(want) {
+			return "", fmt.Errorf("expected %q but got %q", want, got)
+		}
 	}
-	p.tokens = p.tokens[1:]
-	p.accepted = append(p.accepted, t)
-	return t, nil
+
+	p.left = p.left[1:]
+	p.accepted = p.accepted[:len(p.accepted)+1]
+
+	return got, nil
 }
 
-// expectPChars determines if "t" consists of only pchars defined in RFC3986.
-//
-// https://www.ietf.org/rfc/rfc3986.txt, P.49
-//
-//	pchar         = unreserved / pct-encoded / sub-delims / ":" / "@"
-//	unreserved    = ALPHA / DIGIT / "-" / "." / "_" / "~"
-//	sub-delims    = "!" / "$" / "&" / "'" / "(" / ")"
-//	              / "*" / "+" / "," / ";" / "="
-//	pct-encoded   = "%" HEXDIG HEXDIG
-func expectPChars(t string) error {
-	const (
-		init = iota
-		pct1
-		pct2
-	)
-	st := init
-	for _, r := range t {
-		if st != init {
-			if !isHexDigit(r) {
-				return fmt.Errorf("invalid hexdigit: %c(%U)", r, r)
-			}
-			switch st {
-			case pct1:
-				st = pct2
-			case pct2:
-				st = init
-			}
-			continue
-		}
+// IDENT = (ALPHA / "_") *(ALPHA / DIGIT / "_")
+func checkIdent(s string) error {
+	// empty identifier cannot occur here thanks to tokenize
 
-		// unreserved
+	for i, c := range s {
 		switch {
-		case 'A' <= r && r <= 'Z':
+		case '0' <= c && c <= '9':
+			if i == 0 {
+				return fmt.Errorf("identifier %q starts with digit", s)
+			}
 			continue
-		case 'a' <= r && r <= 'z':
+		case 'A' <= c && c <= 'Z':
 			continue
-		case '0' <= r && r <= '9':
+		case 'a' <= c && c <= 'z':
 			continue
-		}
-		switch r {
-		case '-', '.', '_', '~':
-			// unreserved
-		case '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=':
-			// sub-delims
-		case ':', '@':
-			// rest of pchar
-		case '%':
-			// pct-encoded
-			st = pct1
+		case c == '_':
+			continue
 		default:
-			return fmt.Errorf("invalid character in path segment: %q(%U)", r, r)
+			return fmt.Errorf("invalid character %q in identifier %q", c, s)
 		}
 	}
-	if st != init {
-		return fmt.Errorf("invalid percent-encoding in %q", t)
-	}
+
 	return nil
 }
 
-// expectIdent determines if "ident" is a valid identifier in .proto schema ([[:alpha:]_][[:alphanum:]_]*).
-func expectIdent(ident string) error {
-	if ident == "" {
-		return errors.New("empty identifier")
-	}
-	for pos, r := range ident {
-		switch {
-		case '0' <= r && r <= '9':
-			if pos == 0 {
-				return fmt.Errorf("identifier starting with digit: %s", ident)
-			}
-			continue
-		case 'A' <= r && r <= 'Z':
-			continue
-		case 'a' <= r && r <= 'z':
-			continue
-		case r == '_':
-			continue
-		default:
-			return fmt.Errorf("invalid character %q(%U) in identifier: %s", r, r, ident)
+// LITERAL = *UriPchar
+func checkLiteral(s string) error {
+	original := s
+
+	for s != "" {
+		var err error
+		s, err = consumePchar(original, s)
+		if err != nil {
+			return err
 		}
 	}
+
 	return nil
 }
 
-func isHexDigit(r rune) bool {
+// UriPchar = UriUnreserved / UriPctEncoded / UriSubDelims / ":" / "@" ; RFC 3986, URI
+// UriUnreserved = ALPHA / DIGIT / "-" / "." / "_" / "~" ; RFC 3986, URI
+// UriSubDelims = "!" / "$" / "&" / "’" / "(" / ")" / "*" / "+" / "," / ";" / "=" ; RFC 3986, URI
+// UriPctEncoded = "%" HEXDIG HEXDIG ; RFC 3986, URI
+func consumePchar(whole, left string) (string, error) {
+	c, left := left[0], left[1:]
+
+	// Unreserved
 	switch {
-	case '0' <= r && r <= '9':
+	case '0' <= c && c <= '9':
+		fallthrough
+	case 'A' <= c && c <= 'Z':
+		fallthrough
+	case 'a' <= c && c <= 'z':
+		return left, nil
+	}
+
+	switch c {
+	case '-', '.', '_', '~':
+		// Unreserved
+		fallthrough
+	case '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=':
+		// Subdelims
+		fallthrough
+	case ':', '@':
+		// Other pchar
+		return left, nil
+	}
+
+	if c != '%' {
+		return "", fmt.Errorf("invalid character %q in path segment", c)
+	} else if len(left) < 2 || !isHex(left[0]) || !isHex(left[1]) {
+		return "", fmt.Errorf("invalid percent-encoding in %q", whole)
+	}
+
+	return left[2:], nil
+}
+
+func isHex(c byte) bool {
+	switch {
+	case '0' <= c && c <= '9':
 		return true
-	case 'A' <= r && r <= 'F':
+	case 'A' <= c && c <= 'F':
 		return true
-	case 'a' <= r && r <= 'f':
+	case 'a' <= c && c <= 'f':
 		return true
 	}
 	return false

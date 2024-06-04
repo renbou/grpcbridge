@@ -225,17 +225,7 @@ func (s *gwsStream) Send(ctx context.Context, msg proto.Message) error {
 	}
 	defer s.sendActive.Store(false)
 
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- s.send(msg)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return rpcutil.ContextError(ctx.Err())
-	case err := <-errChan:
-		return err
-	}
+	return withCtx(ctx, func() error { return s.send(msg) })
 }
 
 func (s *gwsStream) send(msg proto.Message) error {

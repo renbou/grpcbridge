@@ -9,6 +9,6 @@ coverage:
 
 ignore:
   - "internal/bridgetest"
-  - "internal/httprule"
+  - "webbridge/grpcweb.go"
   - "internal/gwquery"
   - "test"

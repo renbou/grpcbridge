@@ -1,0 +1,16 @@
+Template = "/" Segments [Verb]
+Segments = (SingleSegment ["/" Segments]) / (MultiSegment / MultiSegVariable)
+SingleSegment = "*" / LITERAL / Variable
+MultiSegment = "**"
+Variable = "{" FieldPath ["=" SingleSegments] "}"
+MultiSegVariable = "{" FieldPath ["=" MultiSegments] "}"
+SingleSegments = SingleSegment *("/" SingleSegment) ; не содержит "**"
+MultiSegments = [SingleSegments] MultiSegment ; заканчивается на "**"
+FieldPath = IDENT *("." IDENT)
+Verb = ":" LITERAL
+IDENT = (ALPHA / "_") *(ALPHA / DIGIT / "_") ; идентификатор Protobuf
+LITERAL = *UriPchar
+UriPchar = UriUnreserved / UriPctEncoded / UriSubDelims / ":" / "@" ; RFC 3986, URI
+UriUnreserved = ALPHA / DIGIT / "-" / "." / "_" / "~" ; RFC 3986, URI
+UriSubDelims = "!" / "$" / "&" / "’" / "(" / ")" / "*" / "+" / "," / ";" / "=" ; RFC 3986, URI
+UriPctEncoded = "%" HEXDIG HEXDIG ; RFC 3986, URI

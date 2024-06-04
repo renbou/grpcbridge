@@ -13,7 +13,7 @@ import (
 	"github.com/renbou/grpcbridge/bridgedesc"
 	"github.com/renbou/grpcbridge/bridgelog"
 	"github.com/renbou/grpcbridge/grpcadapter"
-	"github.com/renbou/grpcbridge/internal/httprule"
+	httprule "github.com/renbou/grpcbridge/internal/httprule/gwbased"
 	"github.com/renbou/grpcbridge/internal/syncset"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

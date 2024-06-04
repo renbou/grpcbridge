@@ -1,438 +1,188 @@
 package httprule
 
 import (
-	"errors"
-	"fmt"
-	"reflect"
+	"strings"
 	"testing"
 
-	"google.golang.org/grpc/grpclog"
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestTokenize(t *testing.T) {
-	for _, spec := range []struct {
-		src    string
-		tokens []string
-		verb   string
+func sWildcard() segment {
+	return segment{typ: segmentWildcard}
+}
+
+func sMultiWildcard() segment {
+	return segment{typ: segmentMultiWildcard}
+}
+
+func sLiteral(s string) segment {
+	return segment{typ: segmentLiteral, literal: s}
+}
+
+func sVariable(path []string, segments []segment) segment {
+	return segment{typ: segmentVariable, variable: variable{fieldPath: path, segments: segments}}
+}
+
+// Test_Parse_Ok tests successful HttpRule parsing cases.
+func Test_Parse_Ok(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		tmpl string
+		want *Template
 	}{
 		{
-			src:    "",
-			tokens: []string{eof},
-		},
-		{
-			src:    "v1",
-			tokens: []string{"v1", eof},
-		},
-		{
-			src:    "v1/b",
-			tokens: []string{"v1", "/", "b", eof},
-		},
-		{
-			src:    "v1/endpoint/*",
-			tokens: []string{"v1", "/", "endpoint", "/", "*", eof},
-		},
-		{
-			src:    "v1/endpoint/**",
-			tokens: []string{"v1", "/", "endpoint", "/", "**", eof},
-		},
-		{
-			src: "v1/b/{bucket_name=*}",
-			tokens: []string{
-				"v1", "/",
-				"b", "/",
-				"{", "bucket_name", "=", "*", "}",
-				eof,
+			tmpl: "/",
+			want: &Template{
+				tmpl:     "/",
+				segments: []segment{sLiteral("")},
 			},
 		},
 		{
-			src: "v1/b/{bucket_name=buckets/*}",
-			tokens: []string{
-				"v1", "/",
-				"b", "/",
-				"{", "bucket_name", "=", "buckets", "/", "*", "}",
-				eof,
+			tmpl: "/alpha",
+			want: &Template{
+				tmpl:     "/alpha",
+				segments: []segment{sLiteral("alpha")},
 			},
 		},
 		{
-			src: "v1/b/{bucket_name=buckets/*}/o",
-			tokens: []string{
-				"v1", "/",
-				"b", "/",
-				"{", "bucket_name", "=", "buckets", "/", "*", "}", "/",
-				"o",
-				eof,
+			tmpl: "/alpha/beta",
+			want: &Template{
+				tmpl:     "/alpha/beta",
+				segments: []segment{sLiteral("alpha"), sLiteral("beta")},
 			},
 		},
 		{
-			src: "v1/b/{bucket_name=buckets/*}/o/{name}",
-			tokens: []string{
-				"v1", "/",
-				"b", "/",
-				"{", "bucket_name", "=", "buckets", "/", "*", "}", "/",
-				"o", "/", "{", "name", "}",
-				eof,
+			tmpl: "/alpha/*/test",
+			want: &Template{
+				tmpl:     "/alpha/*/test",
+				segments: []segment{sLiteral("alpha"), sWildcard(), sLiteral("test")},
 			},
 		},
 		{
-			src: "v1/a=b&c=d;e=f:g/endpoint.rdf",
-			tokens: []string{
-				"v1", "/",
-				"a=b&c=d;e=f:g", "/",
-				"endpoint.rdf",
-				eof,
+			tmpl: "/alpha/test/**",
+			want: &Template{
+				tmpl:     "/alpha/test/**",
+				segments: []segment{sLiteral("alpha"), sLiteral("test"), sMultiWildcard()},
 			},
 		},
 		{
-			src: "v1/a/{endpoint}:a",
-			tokens: []string{
-				"v1", "/",
-				"a", "/",
-				"{", "endpoint", "}",
-				eof,
+			tmpl: "/{var}",
+			want: &Template{
+				tmpl:     "/{var}",
+				segments: []segment{sVariable([]string{"var"}, []segment{sWildcard()})},
 			},
-			verb: "a",
 		},
 		{
-			src: "v1/a/{endpoint}:b:c",
-			tokens: []string{
-				"v1", "/",
-				"a", "/",
-				"{", "endpoint", "}",
-				eof,
+			tmpl: "/test/{var=*}",
+			want: &Template{
+				tmpl:     "/test/{var=*}",
+				segments: []segment{sLiteral("test"), sVariable([]string{"var"}, []segment{sWildcard()})},
 			},
-			verb: "b:c",
 		},
-	} {
-		tokens, verb := tokenize(spec.src)
-		if got, want := tokens, spec.tokens; !reflect.DeepEqual(got, want) {
-			t.Errorf("tokenize(%q) = %q, _; want %q, _", spec.src, got, want)
-		}
+		{
+			tmpl: "/v1/b/{var.b.inner=nested/*}/extra",
+			want: &Template{
+				tmpl:     "/v1/b/{var.b.inner=nested/*}/extra",
+				segments: []segment{sLiteral("v1"), sLiteral("b"), sVariable([]string{"var", "b", "inner"}, []segment{sLiteral("nested"), sWildcard()}), sLiteral("extra")},
+			},
+		},
+		{
+			tmpl: "/v1/a/{vA_r1=a/*/b/**}:verb:kek",
+			want: &Template{
+				tmpl:     "/v1/a/{vA_r1=a/*/b/**}:verb:kek",
+				segments: []segment{sLiteral("v1"), sLiteral("a"), sVariable([]string{"vA_r1"}, []segment{sLiteral("a"), sWildcard(), sLiteral("b"), sMultiWildcard()})},
+				verb:     "verb:kek",
+			},
+		},
+		{
+			tmpl: "/T-E_S.T~/b;()%01/c%0a%AB:verb:test",
+			want: &Template{
+				tmpl:     "/T-E_S.T~/b;()%01/c%0a%AB:verb:test",
+				segments: []segment{sLiteral("T-E_S.T~"), sLiteral("b;()%01"), sLiteral("c%0a%AB:verb")},
+				verb:     "test",
+			},
+		},
+	}
 
-		switch {
-		case spec.verb != "":
-			if got, want := verb, spec.verb; !reflect.DeepEqual(got, want) {
-				t.Errorf("tokenize(%q) = %q, _; want %q, _", spec.src, got, want)
+	for _, tt := range tests {
+		t.Run(tt.tmpl, func(t *testing.T) {
+			// Act
+			got, err := Parse(tt.tmpl)
+			if err != nil {
+				t.Fatalf("Parse() returned non-nil error = %q", err)
 			}
 
-		default:
-			if got, want := verb, ""; got != want {
-				t.Errorf("tokenize(%q) = _, %q; want _, %q", spec.src, got, want)
+			// Assert
+			if diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(Template{}, segment{}, variable{})); diff != "" {
+				t.Errorf("Parse() returned result differing from expected (-want +got)\n%s", diff)
 			}
-
-			src := fmt.Sprintf("%s:%s", spec.src, "LOCK")
-			tokens, verb = tokenize(src)
-			if got, want := tokens, spec.tokens; !reflect.DeepEqual(got, want) {
-				t.Errorf("tokenize(%q) = %q, _; want %q, _", src, got, want)
-			}
-			if got, want := verb, "LOCK"; got != want {
-				t.Errorf("tokenize(%q) = _, %q; want _, %q", src, got, want)
-			}
-		}
+		})
 	}
 }
 
-func TestParseSegments(t *testing.T) {
-	for _, spec := range []struct {
-		tokens []string
-		want   []segment
-	}{
-		{
-			tokens: []string{eof},
-			want: []segment{
-				literal(eof),
-			},
-		},
-		{
-			// Note: this case will never arise as tokenize() will never return such a sequence of tokens
-			// and even if it does it will be treated as [eof]
-			tokens: []string{eof, "v1", eof},
-			want: []segment{
-				literal(eof),
-			},
-		},
-		{
-			tokens: []string{"v1", eof},
-			want: []segment{
-				literal("v1"),
-			},
-		},
-		{
-			tokens: []string{"/", eof},
-			want: []segment{
-				wildcard{},
-			},
-		},
-		{
-			tokens: []string{"-._~!$&'()*+,;=:@", eof},
-			want: []segment{
-				literal("-._~!$&'()*+,;=:@"),
-			},
-		},
-		{
-			tokens: []string{"%e7%ac%ac%e4%b8%80%e7%89%88", eof},
-			want: []segment{
-				literal("%e7%ac%ac%e4%b8%80%e7%89%88"),
-			},
-		},
-		{
-			tokens: []string{"v1", "/", "*", eof},
-			want: []segment{
-				literal("v1"),
-				wildcard{},
-			},
-		},
-		{
-			tokens: []string{"v1", "/", "**", eof},
-			want: []segment{
-				literal("v1"),
-				deepWildcard{},
-			},
-		},
-		{
-			tokens: []string{"{", "name", "}", eof},
-			want: []segment{
-				variable{
-					path: "name",
-					segments: []segment{
-						wildcard{},
-					},
-				},
-			},
-		},
-		{
-			tokens: []string{"{", "name", "=", "*", "}", eof},
-			want: []segment{
-				variable{
-					path: "name",
-					segments: []segment{
-						wildcard{},
-					},
-				},
-			},
-		},
-		{
-			tokens: []string{"{", "field", ".", "nested", ".", "nested2", "=", "*", "}", eof},
-			want: []segment{
-				variable{
-					path: "field.nested.nested2",
-					segments: []segment{
-						wildcard{},
-					},
-				},
-			},
-		},
-		{
-			tokens: []string{"{", "name", "=", "a", "/", "b", "/", "*", "}", eof},
-			want: []segment{
-				variable{
-					path: "name",
-					segments: []segment{
-						literal("a"),
-						literal("b"),
-						wildcard{},
-					},
-				},
-			},
-		},
-		{
-			tokens: []string{
-				"v1", "/",
-				"{",
-				"name", ".", "nested", ".", "nested2",
-				"=",
-				"a", "/", "b", "/", "*",
-				"}", "/",
-				"o", "/",
-				"{",
-				"another_name",
-				"=",
-				"a", "/", "b", "/", "*", "/", "c",
-				"}", "/",
-				"**",
-				eof,
-			},
-			want: []segment{
-				literal("v1"),
-				variable{
-					path: "name.nested.nested2",
-					segments: []segment{
-						literal("a"),
-						literal("b"),
-						wildcard{},
-					},
-				},
-				literal("o"),
-				variable{
-					path: "another_name",
-					segments: []segment{
-						literal("a"),
-						literal("b"),
-						wildcard{},
-						literal("c"),
-					},
-				},
-				deepWildcard{},
-			},
-		},
-	} {
-		p := parser{tokens: spec.tokens}
-		segs, err := p.topLevelSegments()
-		if err != nil {
-			t.Errorf("parser{%q}.segments() failed with %v; want success", spec.tokens, err)
-			continue
-		}
-		if got, want := segs, spec.want; !reflect.DeepEqual(got, want) {
-			t.Errorf("parser{%q}.segments() = %#v; want %#v", spec.tokens, got, want)
-		}
-		if got := p.tokens; len(got) > 0 {
-			t.Errorf("p.tokens = %q; want []; spec.tokens=%q", got, spec.tokens)
-		}
-	}
-}
+// Test_Parse_Error tests HttpRule parsing error cases.
+func Test_Parse_Error(t *testing.T) {
+	t.Parallel()
 
-func TestParse(t *testing.T) {
-	for _, spec := range []struct {
-		input       string
-		wantFields  []string
-		wantOpCodes []int
-		wantPool    []string
-		wantVerb    string
+	tests := []struct {
+		tmpl        string
+		wantMessage string
 	}{
 		{
-			input: "/v1/{name}:bla:baa",
-			wantFields: []string{
-				"name",
-			},
-			wantPool: []string{"v1", "name"},
-			wantVerb: "bla:baa",
+			tmpl:        "what",
+			wantMessage: `template "what" does not contain leading /`,
 		},
 		{
-			input: "/v1/{name}:",
-			wantFields: []string{
-				"name",
-			},
-			wantPool: []string{"v1", "name"},
-			wantVerb: "",
+			tmpl:        "/%ax",
+			wantMessage: `unexpected token "%ax" after segments "/"`,
 		},
 		{
-			input: "/v1/{name=segment/wi:th}",
-			wantFields: []string{
-				"name",
-			},
-			wantPool: []string{"v1", "segment", "wi:th", "name"},
-			wantVerb: "",
+			tmpl:        "/{.=*}",
+			wantMessage: `unexpected token "." after segments "/{"`,
 		},
-	} {
-		f, err := Parse(spec.input)
-		if err != nil {
-			t.Errorf("Parse(%q) failed with %v; want success", spec.input, err)
-			continue
-		}
-		tmpl := f.Compile()
-		if !reflect.DeepEqual(tmpl.Fields, spec.wantFields) {
-			t.Errorf("Parse(%q).Fields = %#v; want %#v", spec.input, tmpl.Fields, spec.wantFields)
-		}
-		if !reflect.DeepEqual(tmpl.Pool, spec.wantPool) {
-			t.Errorf("Parse(%q).Pool = %#v; want %#v", spec.input, tmpl.Pool, spec.wantPool)
-		}
-		if tmpl.Template != spec.input {
-			t.Errorf("Parse(%q).Template = %q; want %q", spec.input, tmpl.Template, spec.input)
-		}
-		if tmpl.Verb != spec.wantVerb {
-			t.Errorf("Parse(%q).Verb = %q; want %q", spec.input, tmpl.Verb, spec.wantVerb)
-		}
+		{
+			tmpl:        "/{1=*}",
+			wantMessage: `unexpected token "1" after segments "/{"`,
+		},
+		{
+			tmpl:        "/{var}kek",
+			wantMessage: `unexpected token "kek" after segments "/{var}"`,
+		},
+		{
+			tmpl:        "/{var}:%0z",
+			wantMessage: `unexpected token ":%0z" after segments "/{var}"`,
+		},
+		{
+			tmpl:        "/{var",
+			wantMessage: `unexpected token "\x00" after segments "/{var"`,
+		},
+		{
+			tmpl:        "/{var.1asdf}",
+			wantMessage: `unexpected token "1asdf" after segments "/{var."`,
+		},
+		{
+			tmpl:        "/{var={kek}}",
+			wantMessage: `unexpected token "{kek" after segments "/{var="`,
+		},
+		{
+			tmpl:        "/kek{b}",
+			wantMessage: `unexpected token "{" after segments "/kek"`,
+		},
 	}
-}
 
-func TestParseError(t *testing.T) {
-	for _, spec := range []struct {
-		input     string
-		wantError error
-	}{
-		{
-			input: "v1/{name}",
-			wantError: InvalidTemplateError{
-				tmpl: "v1/{name}",
-				msg:  "no leading /",
-			},
-		},
-	} {
-		_, err := Parse(spec.input)
-		if err == nil {
-			t.Errorf("Parse(%q) unexpectedly did not fail", spec.input)
-			continue
-		}
-		if !errors.Is(err, spec.wantError) {
-			t.Errorf("Error did not match expected error: got %v wanted %v", err, spec.wantError)
-		}
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.tmpl, func(t *testing.T) {
+			// Act
+			_, err := Parse(tt.tmpl)
+			if err == nil {
+				t.Fatalf("Parse() returned nil error")
+			}
 
-func TestParseSegmentsWithErrors(t *testing.T) {
-	for _, spec := range []struct {
-		tokens []string
-	}{
-		{
-			// double slash
-			tokens: []string{"//", eof},
-		},
-		{
-			// invalid literal
-			tokens: []string{"a?b", eof},
-		},
-		{
-			// invalid percent-encoding
-			tokens: []string{"%", eof},
-		},
-		{
-			// invalid percent-encoding
-			tokens: []string{"%2", eof},
-		},
-		{
-			// invalid percent-encoding
-			tokens: []string{"a%2z", eof},
-		},
-		{
-			// unterminated variable
-			tokens: []string{"{", "name", eof},
-		},
-		{
-			// unterminated variable
-			tokens: []string{"{", "name", "=", eof},
-		},
-		{
-			// unterminated variable
-			tokens: []string{"{", "name", "=", "*", eof},
-		},
-		{
-			// empty component in field path
-			tokens: []string{"{", "name", ".", "}", eof},
-		},
-		{
-			// empty component in field path
-			tokens: []string{"{", "name", ".", ".", "nested", "}", eof},
-		},
-		{
-			// invalid character in identifier
-			tokens: []string{"{", "field-name", "}", eof},
-		},
-		{
-			// no slash between segments
-			tokens: []string{"v1", "endpoint", eof},
-		},
-		{
-			// no slash between segments
-			tokens: []string{"v1", "{", "name", "}", eof},
-		},
-	} {
-		p := parser{tokens: spec.tokens}
-		segs, err := p.topLevelSegments()
-		if err == nil {
-			t.Errorf("parser{%q}.segments() succeeded; want InvalidTemplateError; accepted %#v", spec.tokens, segs)
-			continue
-		}
-		if grpclog.V(1) {
-			grpclog.Info(err)
-		}
+			// Assert
+			if !strings.Contains(err.Error(), tt.wantMessage) {
+				t.Errorf("Parse() returned unexpected error %q, want %q", err, tt.wantMessage)
+			}
+		})
 	}
 }
