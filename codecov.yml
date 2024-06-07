@@ -9,6 +9,7 @@ coverage:
 
 ignore:
   - "internal/bridgetest"
+  - "internal/bench"
   - "webbridge/grpcweb.go"
   - "internal/gwquery"
   - "test"
